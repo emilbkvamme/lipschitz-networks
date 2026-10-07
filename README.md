@@ -1,7 +1,7 @@
 # Lipschitz Networks
 
 Research code and experiments for studying Lipschitz-constrained neural networks
-and their relationship to spectral bias.
+applications in HEP.
 
 ## Contents
 
