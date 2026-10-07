@@ -1,0 +1,13 @@
+# Excluded project materials
+/Tutorials/
+
+# Python-generated files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Jupyter-generated metadata
+.ipynb_checkpoints/
+
+# macOS metadata
+.DS_Store

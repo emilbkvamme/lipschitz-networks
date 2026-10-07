@@ -1,0 +1,26 @@
+# Core data and plotting
+numpy
+pandas
+matplotlib
+seaborn
+scipy
+scikit-learn
+
+# Notebook support
+ipykernel
+ipywidgets
+tqdm
+
+# PyTorch side
+torch==2.14.1
+torchvision==0.29.1
+monotonicnetworks==1.5.1
+
+# TensorFlow side
+tensorflow==2.21.0
+keras==3.15.1
+deel-lip @ git+https://github.com/deel-ai/deel-lip.git@a9e1117a497bc5ab74e34fa2c3820677fc98a0cc
+
+# Experiments
+optuna
+tensorboard
