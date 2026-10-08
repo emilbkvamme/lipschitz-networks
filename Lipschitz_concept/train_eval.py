@@ -35,18 +35,33 @@ def evaluate(model, dataloader, loss_fn, device):
 
     return val_loss / total_samples
 
-def train(model, train_loader, val_loader, optimizer, loss_fn, num_epochs, device):
+def train(model, train_loader, val_loader, optimizer, loss_fn, num_epochs, max_iter,  device):
     train_losses = []
     val_losses = []
 
+    early_stopping_counter = 0
+    best_val_loss = float('inf')
+
     for epoch in range(num_epochs):
-        print(f"Epoch {epoch+1}\n-------------------------------")
         train_epoch(model, train_loader, optimizer, loss_fn, device)
         train_loss = evaluate(model, train_loader, loss_fn, device)
         val_loss = evaluate(model, val_loader, loss_fn, device)
 
         train_losses.append(train_loss)
         val_losses.append(val_loss)
+
+        if epoch % 50 == 0 or epoch == num_epochs - 1:
+            print(f"Epoch {epoch+1}: Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            early_stopping_counter = 0
+        else:
+            early_stopping_counter += 1
+
+        if early_stopping_counter >= max_iter:
+            print("Early stopping triggered.")
+            break
 
     return train_losses, val_losses
 
