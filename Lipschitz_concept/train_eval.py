@@ -1,6 +1,12 @@
+import copy
+import multiprocessing as mp
+import os
+
 import torch
 import torch.nn as nn
 import numpy as np
+from torch.nn.utils import parametrize
+from torch.utils.data import DataLoader, TensorDataset
 
 ##### UTILITY FUNCTIONS #####
 # The following functions are just utility functions to avoid code repetition. Their format is based on personal preference
@@ -26,7 +32,8 @@ def evaluate(model, dataloader, loss_fn, device):
     val_loss = 0.0
     total_samples = 0
 
-    with torch.no_grad(): # No gradient computation
+    # The weights are fixed here, so the normalized (parametrized) weights are computed once instead of for every batch
+    with torch.no_grad(), parametrize.cached(): # No gradient computation
         for X, y in dataloader:
             X, y = X.to(device), y.to(device)
             y_pred = model(X)
@@ -35,32 +42,42 @@ def evaluate(model, dataloader, loss_fn, device):
 
     return val_loss / total_samples
 
-def train(model, train_loader, val_loader, optimizer, loss_fn, num_epochs, max_iter,  device):
+def train(model, train_loader, val_loader, optimizer, loss_fn, num_epochs, max_iter, device, train_eval_loader=None, verbose=True):
+    # train_eval_loader: optional loader over the training data used only for computing the training loss after each epoch.
+    # Passing one with a large batch size makes this much cheaper than iterating the (small batch) train_loader again.
+    if train_eval_loader is None:
+        train_eval_loader = train_loader
+
     train_losses = []
     val_losses = []
 
     early_stopping_counter = 0
     best_val_loss = float('inf')
+    best_state = None # Weights of the model at the epoch with the best validation loss
 
     for epoch in range(num_epochs):
         train_epoch(model, train_loader, optimizer, loss_fn, device)
-        train_loss = evaluate(model, train_loader, loss_fn, device)
+        train_loss = evaluate(model, train_eval_loader, loss_fn, device)
         val_loss = evaluate(model, val_loader, loss_fn, device)
 
         train_losses.append(train_loss)
         val_losses.append(val_loss)
 
-        if epoch % 50 == 0 or epoch == num_epochs - 1:
+        if verbose and (epoch % 50 == 0 or epoch == num_epochs - 1):
             print(f"Epoch {epoch+1}: Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+            best_state = copy.deepcopy(model.state_dict())
             early_stopping_counter = 0
         else:
             early_stopping_counter += 1
 
         if early_stopping_counter >= max_iter:
-            print("Early stopping triggered.")
+            if best_state is not None:
+                model.load_state_dict(best_state) # Go back to the best weights instead of keeping the latest ones
+            if verbose:
+                print(f"Early stopping triggered. Restored the weights from epoch {epoch + 1 - early_stopping_counter}.")
             break
 
     return train_losses, val_losses
@@ -69,9 +86,53 @@ def predict(model, dataloader, device):
     model.eval()
     predictions = []
 
-    with torch.no_grad():
+    with torch.no_grad(), parametrize.cached():
         for X, _ in dataloader:
             X = X.to(device)
             y_pred = model(X)
             predictions.append(y_pred.cpu().numpy())
     return np.concatenate(predictions, axis=0)
+
+
+##### PARALLEL SWEEPS #####
+# The networks here are small enough that one CPU core per model is as fast as using all of them, so independent
+# trainings (e.g. a scan over Lipschitz constants, depths or widths) can run side by side in separate processes.
+
+def fit(model_cls, model_kwargs, trn_data, val_data, test_data, lr, num_epochs, batch_size,
+        max_iter=None, seed=42, eval_batch_size=4096, device="cpu"):
+    # Trains a single model with Adam and MSE loss. The *_data arguments are (inputs, targets) tuples of tensors.
+    # max_iter is the early stopping patience of train(), None means no early stopping.
+    # Returns a dictionary with the per-epoch losses and the test predictions.
+    if max_iter is None:
+        max_iter = num_epochs
+    torch.manual_seed(seed)
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+
+    trn_loader = DataLoader(TensorDataset(*trn_data), batch_size=batch_size, shuffle=True, generator=generator)
+    trn_eval_loader = DataLoader(TensorDataset(*trn_data), batch_size=eval_batch_size, shuffle=False)
+    val_loader = DataLoader(TensorDataset(*val_data), batch_size=eval_batch_size, shuffle=False)
+    test_loader = DataLoader(TensorDataset(*test_data), batch_size=eval_batch_size, shuffle=False)
+
+    model = model_cls(**model_kwargs).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+
+    train_losses, val_losses = train(model, trn_loader, val_loader, optimizer, nn.MSELoss(), num_epochs, max_iter, device,
+                                     train_eval_loader=trn_eval_loader, verbose=False)
+
+    return {"train_losses": train_losses,
+            "val_losses": val_losses,
+            "predictions": predict(model, test_loader, device)}
+
+def _fit_worker(job):
+    torch.set_num_threads(1)
+    return fit(**job)
+
+def fit_many(jobs, n_workers=None):
+    # Runs fit(**job) for every job in parallel and returns the results in the same order.
+    # model_cls must be importable (i.e. defined in a module, not in the notebook) to be sent to the worker processes.
+    if n_workers is None:
+        n_workers = min(len(jobs), max(1, (os.cpu_count() or 2) // 2))
+
+    with mp.get_context("spawn").Pool(n_workers) as pool:
+        return pool.map(_fit_worker, jobs)
