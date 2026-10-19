@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
 import numpy as np
+import matplotlib.pyplot as plt
 
 
 ##### DATASET GENERATION #####
@@ -22,13 +23,16 @@ def sine_function_train_data(N, frequency=1.0, seed=6):
 
     return x_train, y_train, x_linspace, y_linspace
 
-def gaussian_function_data(N, mu, sigma, seed=6, noise_magnitude=0.01):
+def gaussian_function_data(N, mu, sigma, seed=6, noise_magnitude=0.01, range=(-5, 5)):
     """
     Generate data from a Gaussian function with added noise.
+
+    The range must be wide enough for the best L-Lipschitz fit (a tent with half-width sqrt(area / L)) to come back
+    down to zero inside it, otherwise the edges of the range, not L, set the width of the fit.
     """
     torch.manual_seed(seed)  # Setting seed for reproducibility
 
-    x_train = torch.linspace(-3*sigma, 3*sigma, N).unsqueeze(-1)
+    x_train = torch.linspace(range[0], range[1], N).unsqueeze(-1)
 
     # Adding some noise to the Gaussian function to make it more challenging for the model to learn
     train_error = torch.randn(N).view(-1, 1) * noise_magnitude # Sampling N random numbers from a normal distribution
@@ -36,10 +40,13 @@ def gaussian_function_data(N, mu, sigma, seed=6, noise_magnitude=0.01):
     y_train = gaussian +  train_error  # Adding noise to increase learning
 
     # Plotting data
-    x_linspace = torch.linspace(-3*sigma, 3*sigma, 2*N).unsqueeze(-1)
+    x_linspace = torch.linspace(range[0], range[1], 2*N).unsqueeze(-1)
     y_linspace = (1/(sigma * torch.sqrt(torch.tensor(2 * np.pi)))) * torch.exp(-0.5 * ((x_linspace - mu) / sigma) ** 2)
     return x_train, y_train, x_linspace, y_linspace
 
+def gaussian_function(x, mu, sigma):
+    """Calculates the Gaussian function for given x, mu, and sigma."""
+    return (1/(sigma * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x - mu) / sigma) ** 2)
 
 class BasicDataset(Dataset):
     """A simple dataset class for handling input and target data."""
@@ -82,15 +89,81 @@ def calculate_lipschitz_constant(model, x_data):
 
     return lipschitz_constant
 
-def lipschitz_floor_1D(x, y, L, max_points = 5000):
-    """ Best fit possible for an L-Lipschitz function to the points (x, y) in 1D. Done by solving a quadratic programming problem.
-    
-    Returns
-        g : best L-Lipschitz values at the input points
-        mse : the floor, mean((g - y)^2)
-    
+
+#### RESOLUTION FUNCTIONS ####
+def FWHM_calculation(x, f):
     """
+    Calculate the Full Width at Half Maximum (FWHM) of a function f defined on x.
+    Returns the FWHM value.
+    """
+    half_max = np.max(f) / 2.0
+    indices = np.where(f >= half_max)[0]
+    if len(indices) < 2:
+        return 0.0  # Not enough points to define FWHM
+    fwhm = x[indices[-1]] - x[indices[0]]
+    return fwhm
 
 #### OPTIMIZING THE FLOOR ####
 
+
+
+
+###### TRAINING ######
+def train_full_batch(model, x, y, steps=6000, lr=3e-3):
+    """
+    Plain full-batch training with Adam, a cosine learning rate schedule and MSE loss.
+    Used for the small 1D robustness tests, where the whole data set fits in one batch.
+    Returns the trained model.
+    """
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=steps)
+    for _ in range(steps):
+        optimizer.zero_grad()
+        loss = ((model(x) - y) ** 2).mean()
+        loss.backward()
+        optimizer.step()
+        scheduler.step()
+    return model
+
+
+###### NOISE AND FOURIER SPECTRA ######
+def fourier_spectrum(x, f):
+    """
+    Calculates the amplitude spectrum of f, sampled on the evenly spaced grid x.
+    Returns the angular frequencies omega and the amplitude at each frequency.
+    The amplitudes are scaled so that a term A * sin(omega * x) shows up as a peak of height A.
+    """
+    n = len(f)
+    dx = x[1] - x[0]                          # grid spacing
+
+    fourier = np.fft.rfft(f)                  # Fourier transform (only positive frequencies, since f is real)
+    amplitude = 2 * np.abs(fourier) / n       # scale so a sine of amplitude A gives a peak of height A
+    amplitude[0] = amplitude[0] / 2           # the constant term (omega = 0) should not be doubled
+
+    frequency = np.fft.rfftfreq(n, d=dx)      # frequencies in cycles per unit of x
+    omega = 2 * np.pi * frequency             # convert to angular frequency, to match sin(omega * x)
+    return omega, amplitude
+
+
+def noise_removed(prediction, clean, noise):
+    """
+    Share of the noise energy that the prediction did NOT copy. Works for any kind of noise.
+    The error of the prediction is split into a copy of the noise and a rest:
+        prediction - clean = copied * noise + rest,   copied = sum((prediction - clean) * noise) / sum(noise^2)
+    copied = 1 means the network reproduced the noise exactly, copied = 0 means none of it.
+    The noise energy that is kept is copied^2, so noise removed = 1 - copied^2.
+    """
+    copied = np.sum((prediction - clean) * noise) / np.sum(noise ** 2)
+    return 1 - copied ** 2
+
+
+###### PLOTTING (report format) ######
+# One style for all report figures: the same text size everywhere, a closed black frame, no grid, no legend box
+REPORT_STYLE = {
+    "font.size": 12, "axes.labelsize": 12, "xtick.labelsize": 12, "ytick.labelsize": 12, "legend.fontsize": 12,
+    "axes.spines.top": True, "axes.spines.right": True, "axes.edgecolor": "black",
+    "xtick.color": "black", "ytick.color": "black",
+    "axes.grid": False, "axes.axisbelow": True,
+    "legend.frameon": False, "legend.handlelength": 1.6, "figure.dpi": 150, "savefig.bbox": "tight",
+}
 
