@@ -1,6 +1,7 @@
 # Excluded project materials
 /Tutorials/
 /Presentations/
+/Plots/
 
 # Python-generated files
 __pycache__/
