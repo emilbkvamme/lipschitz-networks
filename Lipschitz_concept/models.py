@@ -38,7 +38,8 @@ class LipschitzModel(nn.Module):
                  depth = 3, 
                  lipschitz_bound=1.0,
                  output_bias_init=None,
-                 hidden_init="default"):
+                 hidden_init="default",
+                 input_norm="l1"):
         super(LipschitzModel, self).__init__()
 
         ######## CHECKING PARAMETERS #######
@@ -51,9 +52,19 @@ class LipschitzModel(nn.Module):
         if hidden_init not in ("default", "identity"):
             raise ValueError(f"hidden_init ({hidden_init}) must be 'default' or 'identity'")
 
+        # The norm of the INPUT the bound is measured in, |f(x) - f(y)| <= L ||x - y||, is set by the first layer.
+        # All later layers are "inf" normalised (inf -> inf), so the first layer decides:
+        #   "l1":   "one-inf", every weight |w_ij| <= 1, so every partial derivative is at most L (the default)
+        #   "l2":   "two-inf", every row has Euclidean length <= 1, the same bound in every direction
+        #   "linf": "inf",     every row has L1 length <= 1, so |df/dx_1| + ... + |df/dx_n| <= L
+        # In 1D the three are the same.
+        first_layer_kinds = {"l1": "one-inf", "l2": "two-inf", "linf": "inf"}
+        if input_norm not in first_layer_kinds:
+            raise ValueError(f"input_norm ({input_norm}) must be 'l1', 'l2' or 'linf'")
+
         ####### ADDING LAYERS #######
         layers = [ # Adding input layer with direct normalization
-            lmn.direct_norm(torch.nn.Linear(input_dim, hidden_dim), kind="one-inf"),
+            lmn.direct_norm(torch.nn.Linear(input_dim, hidden_dim), kind=first_layer_kinds[input_norm]),
             lmn.GroupSort(n_groups)
         ]
 

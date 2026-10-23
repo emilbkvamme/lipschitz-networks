@@ -26,7 +26,51 @@ def _difference_matrix(axes):
     return sp.vstack(blocks).tocsc()
 
 
-def lipschitz_floor_nd(y, axes, L, tol=1e-9, max_iter=100, return_info=False):
+def _stencil_offsets(n, reach):
+    """
+    Integer steps v between grid points, with every entry between -reach and reach, one per direction: v and -v give
+    the same constraint, so only one of them is kept (the first non-zero entry is positive), and multiples like (2, 2)
+    are left out (they follow from (1, 1)).
+    """
+    values = np.arange(-reach, reach + 1)
+    offsets = []
+    for v in np.stack(np.meshgrid(*[values] * n, indexing="ij"), axis=-1).reshape(-1, n):
+        nonzero = v[v != 0]
+        if len(nonzero) == 0 or nonzero[0] < 0:
+            continue
+        if np.gcd.reduce(np.abs(nonzero)) != 1:
+            continue
+        offsets.append(v)
+    return np.array(offsets)
+
+
+def _stencil_difference_matrix(axes, norm, reach):
+    """
+    Sparse matrix D of the differences between grid points that are one stencil step v apart, divided by the length of
+    the step in the given norm: (D g) are the slopes along all the stencil directions. Evenly spaced axes only.
+    """
+    spacing = np.array([a[1] - a[0] for a in axes])
+    shape = tuple(len(a) for a in axes)
+    index = np.arange(np.prod(shape)).reshape(shape)
+    order = {"l2": 2, "linf": np.inf}[norm]
+
+    rows, cols, values = [], [], []
+    n_rows = 0
+    for v in _stencil_offsets(len(axes), reach):
+        # All grid points x for which x + v is also on the grid
+        start = tuple(slice(max(0, -s), m - max(0, s)) for s, m in zip(v, shape))
+        end = tuple(slice(max(0, s), m - max(0, -s)) for s, m in zip(v, shape))
+        i_start, i_end = index[start].ravel(), index[end].ravel()
+        length = np.linalg.norm(v * spacing, ord=order)
+        row = n_rows + np.arange(len(i_start))
+        rows += [row, row]
+        cols += [i_start, i_end]
+        values += [np.full(len(row), -1 / length), np.full(len(row), 1 / length)]
+        n_rows += len(i_start)
+    return sp.csc_matrix((np.concatenate(values), (np.concatenate(rows), np.concatenate(cols))), shape=(n_rows, index.size))
+
+
+def lipschitz_floor_nd(y, axes, L, tol=1e-9, max_iter=100, return_info=False, norm="l1"):
     """
     Best L-Lipschitz fit (in the L1 norm) to the values y on a rectangular n-dimensional grid:
 
@@ -41,11 +85,27 @@ def lipschitz_floor_nd(y, axes, L, tol=1e-9, max_iter=100, return_info=False):
 
     y: array of shape (m_1, ..., m_n), axes: the grid coordinates along every axis (increasing).
     Returns (floor, MSE), or (floor, MSE, info) with return_info=True.
+
+    norm: the norm of the input the bound is measured in (the input_norm of LipschitzModel).
+        "l1"   (default) as above: neighbours along every axis, exact.
+        "linf" |g(x) - g(x')| <= L ||x - x'||_inf: neighbours along the axes and the diagonals, each step of length one
+               grid spacing. The shortest path on the grid then has exactly the inf-distance, so this is also exact.
+        "l2"   |g(x) - g(x')| <= L ||x - x'||_2: constrained along the 16 directions of steps up to 3 grid points
+               (in 2D). The path along those directions is at most 1.3 % longer than the straight line, so the floor
+               may use slopes up to about 1.013 L in the directions in between: a close, slightly optimistic floor.
+               Evenly spaced axes only.
     """
     y = np.asarray(y, dtype=float)
     shape = y.shape
     y_flat = y.ravel()
-    D = _difference_matrix(axes)
+    if norm == "l1":
+        D = _difference_matrix(axes)
+    elif norm == "linf":
+        D = _stencil_difference_matrix(axes, "linf", reach=1)
+    elif norm == "l2":
+        D = _stencil_difference_matrix(axes, "l2", reach=3)
+    else:
+        raise ValueError(f"norm ({norm}) must be 'l1', 'l2' or 'linf'")
     DT = D.T.tocsc()
     identity = sp.identity(y.size, format="csc")
     scale = max(np.max(np.abs(y)), 1e-300)
