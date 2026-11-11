@@ -1,4 +1,6 @@
 # Utility functions for the toy example notebook
+import os
+import pickle
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
@@ -167,3 +169,39 @@ REPORT_STYLE = {
     "legend.frameon": False, "legend.handlelength": 1.6, "figure.dpi": 150, "savefig.bbox": "tight",
 }
 
+
+
+###### FOLDERS ######
+# Every test writes to Plots/<dimension>/<topic> and Results/<dimension>/<topic> inside the Toy folder,
+# no matter which folder the script is run from.
+TOY_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def plot_dir(dimension, topic):
+    """The plot folder of one test, e.g. plot_dir("1D", "Optimal_solution"). Made if it does not exist."""
+    path = os.path.join(TOY_DIR, "Plots", dimension, topic)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def save_results(results, file_name):
+    """Saves the results (dictionaries, tuples, numpy arrays and numbers) with pickle."""
+    os.makedirs(os.path.dirname(file_name), exist_ok=True)
+    with open(file_name, "wb") as file:
+        pickle.dump(results, file)
+    print(f"Saved the results to {file_name}")
+
+
+def load_results(file_name):
+    """Loads the results saved by save_results."""
+    with open(file_name, "rb") as file:
+        results = pickle.load(file)
+    print(f"Loaded the results from {file_name}")
+    return results
+
+
+def results_dir(dimension, topic):
+    """The folder for the saved training results of one test. Made if it does not exist."""
+    path = os.path.join(TOY_DIR, "Results", dimension, topic)
+    os.makedirs(path, exist_ok=True)
+    return path

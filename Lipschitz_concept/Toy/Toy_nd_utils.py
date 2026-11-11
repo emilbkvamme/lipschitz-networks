@@ -40,6 +40,16 @@ def isotropic_cov(sigma, n):
     """Covariance sigma^2 * identity of an isotropic Gaussian in n dimensions."""
     return sigma ** 2 * np.eye(n)
 
+def nonisotropic_cov(sigma, n):
+    """Covariance of a non-isotropic Gaussian in n dimensions, with different variances along each axis."""
+    return np.diag([sigma * (i + 1) for i in range(n)])
+
+def rotated_covariance_2D(sigma_long, sigma_short, angle_degrees):
+    """Covariance of a 2D Gaussian with widths sigma_long and sigma_short, the long direction at the given angle."""
+    angle = np.radians(angle_degrees)
+    rotation = np.array([[np.cos(angle), -np.sin(angle)],
+                         [np.sin(angle), np.cos(angle)]])
+    return rotation @ np.diag([sigma_long ** 2, sigma_short ** 2]) @ rotation.T
 
 def gaussian_lipschitz_constant_nd(cov, norm="l1"):
     """
@@ -269,3 +279,4 @@ def band_power(axes, f, band_lower, band_upper):
     k_length = np.linalg.norm(K, axis=-1)
     power = coefficients ** 2
     return np.array([np.sum(power[(k_length >= lo) & (k_length < hi)]) for lo, hi in zip(band_lower, band_upper)])
+

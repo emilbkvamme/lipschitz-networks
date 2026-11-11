@@ -1,0 +1,46 @@
+case,network,lr,steps,MSE_data,MSE_gap,peak_ratio
+none,Lipschitz L=1,0.003,6000,4.6537e-08,nan,1.0071
+none,Lipschitz L=1,0.01,6000,1.6188e-08,nan,1.0000
+none,Lipschitz L=2,0.003,6000,1.9513e-09,nan,0.9993
+none,Lipschitz L=2,0.01,6000,7.1497e-10,nan,0.9993
+none,Unconstrained,0.003,6000,3.3078e-08,nan,0.9969
+none,Lipschitz L=1,0.003,20000,1.3563e-08,nan,1.0004
+none,Lipschitz L=1,0.01,20000,2.5475e-09,nan,1.0038
+none,Lipschitz L=2,0.003,20000,5.8368e-10,nan,0.9993
+none,Lipschitz L=2,0.01,20000,5.8057e-10,nan,1.0010
+none,Unconstrained,0.003,20000,3.8029e-09,nan,0.9999
+none,Lipschitz L=1,0.003,50000,6.9615e-09,nan,1.0017
+none,Lipschitz L=1,0.01,50000,2.2429e-09,nan,1.0000
+none,Lipschitz L=2,0.003,50000,3.6896e-10,nan,1.0001
+none,Lipschitz L=2,0.01,50000,3.2318e-10,nan,1.0004
+none,Unconstrained,0.003,50000,8.3209e-10,nan,0.9993
+wedge90,Lipschitz L=1,0.003,6000,2.5998e-08,5.8534e-05,1.0073
+wedge90,Lipschitz L=1,0.01,6000,1.8849e-08,1.0073e-05,1.0011
+wedge90,Lipschitz L=2,0.003,6000,1.6516e-09,4.7661e-06,0.9984
+wedge90,Lipschitz L=2,0.01,6000,6.3653e-10,5.4615e-06,0.9940
+wedge90,Unconstrained,0.003,6000,2.8966e-08,5.0678e-05,0.9939
+wedge90,Lipschitz L=1,0.003,20000,1.0492e-08,3.9611e-05,1.0086
+wedge90,Lipschitz L=1,0.01,20000,2.2771e-09,2.3261e-05,1.0152
+wedge90,Lipschitz L=2,0.003,20000,3.9308e-10,5.0420e-06,0.9970
+wedge90,Lipschitz L=2,0.01,20000,6.4169e-10,4.1358e-06,0.9964
+wedge90,Unconstrained,0.003,20000,3.1850e-09,1.7127e-05,0.9977
+wedge90,Lipschitz L=1,0.003,50000,6.5874e-09,6.6705e-05,1.0112
+wedge90,Lipschitz L=1,0.01,50000,1.6317e-09,4.5010e-06,1.0023
+wedge90,Lipschitz L=2,0.003,50000,1.7965e-10,4.7323e-06,0.9973
+wedge90,Lipschitz L=2,0.01,50000,1.9503e-10,2.9587e-06,1.0016
+wedge90,Unconstrained,0.003,50000,1.3608e-09,2.4404e-06,1.0019
+opposite90,Lipschitz L=1,0.003,6000,2.0177e-08,1.8786e-04,0.9974
+opposite90,Lipschitz L=1,0.01,6000,1.2851e-08,9.0468e-05,0.9978
+opposite90,Lipschitz L=2,0.003,6000,1.7315e-09,2.2274e-05,0.9960
+opposite90,Lipschitz L=2,0.01,6000,6.0174e-10,1.8647e-05,0.9927
+opposite90,Unconstrained,0.003,6000,2.1224e-08,6.8270e-05,0.9982
+opposite90,Lipschitz L=1,0.003,20000,5.5959e-09,2.3392e-04,0.9987
+opposite90,Lipschitz L=1,0.01,20000,2.0881e-09,8.6476e-05,0.9844
+opposite90,Lipschitz L=2,0.003,20000,3.9063e-10,1.5385e-05,0.9968
+opposite90,Lipschitz L=2,0.01,20000,5.4462e-10,5.4605e-06,0.9933
+opposite90,Unconstrained,0.003,20000,1.6900e-09,1.5551e-05,0.9965
+opposite90,Lipschitz L=1,0.003,50000,3.9593e-09,1.7376e-04,0.9985
+opposite90,Lipschitz L=1,0.01,50000,9.3330e-10,6.8463e-05,0.9850
+opposite90,Lipschitz L=2,0.003,50000,2.1296e-10,1.9375e-05,0.9978
+opposite90,Lipschitz L=2,0.01,50000,2.5133e-10,9.4727e-06,0.9952
+opposite90,Unconstrained,0.003,50000,4.7560e-10,9.6115e-06,0.9970
