@@ -4,7 +4,8 @@
 # HOW:
 #   1. The Lipschitz constant of the Gaussian as a function of sigma, L_true = 1 / (sigma^2 sqrt(2 pi e))
 #   2. The floor for a few L below L_true: the fits and their slopes
-#   3. MSE and FWHM of the floor as a function of L, a wide scan and a zoom around L_true (the kink)
+#   3. MSE and FWHM as a function of L, a wide scan and a zoom around L_true (the kink): the floor alone, and
+#      Lipschitz networks trained for every L (mean and spread over seeds) against the floor
 #   4. Integrated squared and absolute error of the floor for several sigma (scaling check)
 #   5. Lipschitz networks trained for the same L as in 2, against the floor, with the unconstrained network
 
@@ -27,13 +28,18 @@ from lipschitz_floor import lipschitz_floor
 QUICK = False                      # True: few points, short training, only to check that everything runs
 PLOT_DIR = plot_dir("1D", "Optimal_solution")
 RESULTS_FILE = os.path.join(results_dir("1D", "Optimal_solution"), "networks_quick.pkl" if QUICK else "networks.pkl")
+# One file per scan and number of training steps, e.g. network_scan_zoom_6000steps.pkl ({} = scan suffix, steps)
+NETWORK_SCAN_FILE = os.path.join(results_dir("1D", "Optimal_solution"),
+                                 "network_scan{}_{}steps_quick.pkl" if QUICK else "network_scan{}_{}steps.pkl")
 LOAD_SAVED = True                  # True: use the saved networks if they exist, instead of training again
 
-# The Gaussian, as in the notebook
+# The Gaussian
 SIGMA = 0.1
 N_POINTS = 400 if QUICK else 4000  # the notebook evaluated everything on 2 * 2000 points
+SAMPLE_SEED = 0                    # the same random points in every run (the saved networks are trained on them)
 X_RANGE = (-5, 5)
-L_SHOW = [1, 3, 10, 20]            # the L of the floor fits and the networks (all below L_true = 24.2)
+L_TRUE = gaussian_lipschitz_constant(SIGMA)
+L_SHOW = np.array([0.05, 0.20, 0.65, 0.9])*L_TRUE          # the L of the floor fits and the networks, as fractions of L_true = 24.2
 
 # Networks, as in the notebook
 SEEDS = [0, 1] if QUICK else [0, 1, 2]
@@ -41,13 +47,22 @@ STEPS = 100 if QUICK else 6000
 LEARNING_RATE = 3e-3
 HIDDEN_DIM, N_GROUPS, DEPTH = 64, 8, 5
 
+# The L scans, MSE and FWHM against L / L_true, by file suffix: the range of L / L_true, the labelled x ticks and the
+# training steps of the networks. The zoom gets more steps, to test whether the networks close to L_true are undertrained
+SCANS = {"": dict(L_range=(0.01, 2.0), x_ticks=None, steps=STEPS),
+         "_zoom": dict(L_range=(0.5, 1.01), x_ticks=[0.5, 0.7, 1.0], steps=200 if QUICK else 20000)}
+N_SCAN_FLOOR = 8 if QUICK else 40          # L values per scan for the floor (cheap)
+N_SCAN_NETWORKS = 3 if QUICK else 12       # L values per scan for the networks (len(SEEDS) networks each, ~1 min per network)
+
 # Figure format
 PANEL_SIZE = (3.1, 2.8)            # inches, about the size of a 0.48\textwidth subfigure (two side by side)
 # Figures that sit side by side in the report (floor next to networks) get the same fixed size and margins,
 # and are saved without tight cropping, so their axes line up
-PAIR_SIZE = (3.1, 3.5)
-PAIR_MARGINS = dict(left=0.24, right=0.96, top=0.97, bottom=0.33)
-PAIR_LEGEND = dict(loc="upper center", bbox_to_anchor=(0.4, -0.2), ncol=3,
+# The legend has two columns (the labels 0.65 L_true are too wide for three), centred on the figure, and room for
+# three rows: four L values, the truth and the unconstrained network. The axes are 2.24 inches high.
+PAIR_SIZE = (3.1, 3.75)
+PAIR_MARGINS = dict(left=0.24, right=0.96, top=0.972, bottom=0.375)
+PAIR_LEGEND = dict(loc="upper center", bbox_to_anchor=((0.5 - 0.24) / (0.96 - 0.24), -0.2), ncol=2,
                    handlelength=1.0, columnspacing=0.8, handletextpad=0.4)
 C_TRUE, C_MUTED, C_REF = "#1f1f1f", "#6b6a66", "#9a9893"
 FLOOR_SHADES = plt.cm.Blues(np.linspace(0.4, 0.95, len(L_SHOW)))       # theory: blue, light -> dark = small -> large L
@@ -56,8 +71,13 @@ NETWORK_SHADES = plt.cm.Oranges(np.linspace(0.4, 0.95, len(L_SHOW)))   # network
 
 #### CALCULATIONS ####
 def make_gaussian(sigma, n_points, x_range):
-    """The Gaussian on evenly spaced points. Returns x and f(x) as flat arrays."""
-    x = np.linspace(x_range[0], x_range[1], n_points)
+    """
+    The Gaussian on random points. Must be random to ensure that we do not inherit grid effects.
+    The points are sorted, which the slopes (np.gradient), integrals (np.trapezoid) and line plots need. This gives the
+    networks no extra information: the loss is a mean over all points, so their order has no effect on training.
+    """
+    rng = np.random.default_rng(SAMPLE_SEED)
+    x = np.sort(rng.uniform(x_range[0], x_range[1], n_points))
     return x, gaussian_function(x, 0.0, sigma)
 
 
@@ -102,18 +122,69 @@ def integrated_floor_errors(sigma_values, L_ratios, points_per_sigma):
     return ISE, IAE
 
 
+def lipschitz_job(x, y, L, seed, steps=STEPS):
+    """The training job of one Lipschitz network with bound L on the points (x, y), for train_many."""
+    return dict(kind="lipschitz", seed=seed, steps=steps, lr=LEARNING_RATE, x=x.reshape(-1, 1), y=y,
+                model_kwargs=dict(input_dim=1, hidden_dim=HIDDEN_DIM, output_dim=1, n_groups=N_GROUPS,
+                                  depth=DEPTH, lipschitz_bound=L))
+
+
+def network_scan(x, y, L_values, steps):
+    """
+    Lipschitz networks for every L and seed, trained on the clean Gaussian as in 5, for the given number of steps.
+    Returns the MSE on the training points and the FWHM of every network, two arrays of shape (seeds, L values).
+    """
+    jobs = [lipschitz_job(x, y, L, seed, steps) for L in L_values for seed in SEEDS]
+    print(f"Training {len(jobs)} networks for the L scan, {steps} steps each")
+    results = iter(train_many(jobs))
+
+    MSE = np.zeros((len(SEEDS), len(L_values)))
+    FWHM = np.zeros_like(MSE)
+    for j in range(len(L_values)):
+        for i in range(len(SEEDS)):
+            prediction = next(results)["prediction"]
+            MSE[i, j] = np.mean((prediction - y) ** 2)
+            FWHM[i, j] = FWHM_calculation(x, prediction)
+    return MSE, FWHM
+
+
+def network_scans(x, y, L_true):
+    """
+    The network scan for every entry of SCANS. Every scan is saved in its own file (NETWORK_SCAN_FILE, with the number
+    of steps in the name) together with the training points and the L values, so the plots can be remade without
+    training. A saved scan is only used if both are the same as now. Changing the steps of one scan therefore trains
+    only that scan again, and the results for the old number of steps are kept.
+    Returns scans[suffix] = (L_ratios, MSE, FWHM), with MSE and FWHM of shape (seeds, L values).
+    """
+    scans = {}
+    for suffix, scan in SCANS.items():
+        low, high = scan["L_range"]
+        L_ratios = np.logspace(np.log10(low), np.log10(high), N_SCAN_NETWORKS)
+        file_name = NETWORK_SCAN_FILE.format(suffix, scan["steps"])
+
+        if LOAD_SAVED and os.path.exists(file_name):
+            with open(file_name, "rb") as file:
+                saved = pickle.load(file)
+            if np.array_equal(saved["x"], x) and np.array_equal(saved["L_ratios"], L_ratios):
+                print(f"Loaded the network scan from {file_name}")
+                scans[suffix] = (L_ratios, saved["MSE"], saved["FWHM"])
+                continue
+            print(f"The saved network scan in {file_name} used other points or L values: training again")
+
+        MSE, FWHM = network_scan(x, y, L_ratios * L_true, scan["steps"])
+        with open(file_name, "wb") as file:
+            pickle.dump(dict(x=x, L_ratios=L_ratios, MSE=MSE, FWHM=FWHM), file)
+        scans[suffix] = (L_ratios, MSE, FWHM)
+    return scans
+
+
 def train_networks(x, y, L_values):
     """
     Lipschitz networks for every L and seed, and the unconstrained network for every seed, trained on the clean
     Gaussian. Returns fits[L] and slopes[L] with shape (seeds, points), and the same for the unconstrained network.
     """
     x_in = x.reshape(-1, 1)
-    jobs = []
-    for L in L_values:
-        for seed in SEEDS:
-            jobs.append(dict(kind="lipschitz", seed=seed, steps=STEPS, lr=LEARNING_RATE, x=x_in, y=y,
-                             model_kwargs=dict(input_dim=1, hidden_dim=HIDDEN_DIM, output_dim=1, n_groups=N_GROUPS,
-                                               depth=DEPTH, lipschitz_bound=L)))
+    jobs = [lipschitz_job(x, y, L, seed) for L in L_values for seed in SEEDS]
     for seed in SEEDS:
         jobs.append(dict(kind="unconstrained", seed=seed, steps=STEPS, lr=LEARNING_RATE, x=x_in, y=y,
                          model_kwargs=dict(input_dim=1, hidden_dim=HIDDEN_DIM, output_dim=1, depth=DEPTH)))
@@ -128,6 +199,27 @@ def train_networks(x, y, L_values):
     runs = [next(results) for _ in SEEDS]
     fits_unconstrained = np.array([run["prediction"] for run in runs])
     slopes_unconstrained = np.array([run["gradient"].ravel() for run in runs])
+    return fits, slopes, fits_unconstrained, slopes_unconstrained
+
+
+def saved_or_trained_networks(x, y):
+    """
+    The networks of 5, for every L in L_SHOW. Loaded from RESULTS_FILE if they were trained on the same points and
+    L values as now, otherwise trained again and saved together with the points and L values.
+    Returns fits, slopes, fits_unconstrained, slopes_unconstrained (see train_networks).
+    """
+    if LOAD_SAVED and os.path.exists(RESULTS_FILE):
+        with open(RESULTS_FILE, "rb") as file:
+            saved = pickle.load(file)
+        if np.array_equal(saved["x"], x) and np.array_equal(saved["L_values"], L_SHOW):
+            print(f"Loaded the networks from {RESULTS_FILE}")
+            return saved["fits"], saved["slopes"], saved["fits_unconstrained"], saved["slopes_unconstrained"]
+        print(f"The saved networks in {RESULTS_FILE} used other points or L values: training again")
+
+    fits, slopes, fits_unconstrained, slopes_unconstrained = train_networks(x, y, L_SHOW)
+    with open(RESULTS_FILE, "wb") as file:
+        pickle.dump(dict(x=x, L_values=L_SHOW, fits=fits, slopes=slopes, fits_unconstrained=fits_unconstrained,
+                         slopes_unconstrained=slopes_unconstrained), file)
     return fits, slopes, fits_unconstrained, slopes_unconstrained
 
 
@@ -172,10 +264,11 @@ def plot_lipschitz_constant(sigma_values, file_name):
         plt.close(fig)
 
 
-def plot_curves(x, truth, curves, shades, x_limits, y_label, file_name, unconstrained=None, bands=None):
+def plot_curves(x, truth, curves, shades, x_limits, y_label, file_name, L_true, unconstrained=None, bands=None):
     """
-    The shared format of the fit and slope figures: one line per L (shades), the truth dashed on top,
-    optionally the unconstrained network dotted and a band (min to max over seeds) around every line.
+    The shared format of the fit and slope figures: one line per L (shades), labelled as a fraction of L_true like the
+    L scans, the truth dashed on top, optionally the unconstrained network dotted and a band (min to max over seeds)
+    around every line.
     """
     with plt.rc_context(REPORT_STYLE), plt.rc_context({"savefig.bbox": "standard"}):
         fig, ax = plt.subplots(figsize=PAIR_SIZE)
@@ -184,7 +277,7 @@ def plot_curves(x, truth, curves, shades, x_limits, y_label, file_name, unconstr
         for (L, curve), color in zip(curves.items(), shades):
             if bands is not None:
                 ax.fill_between(x, bands[L][0], bands[L][1], color=color, alpha=0.3, lw=0)
-            line, = ax.plot(x, curve, color=color, lw=1.4, label=rf"$L = {L:g}$")
+            line, = ax.plot(x, curve, color=color, lw=1.4, label=rf"${L / L_true:.2f}\,L_\mathrm{{true}}$")
             lines.append(line)
         if unconstrained is not None:
             unconstrained_line, = ax.plot(x, unconstrained, color=C_REF, lw=1.2, ls=":", label="Unconstr.")
@@ -200,17 +293,49 @@ def plot_curves(x, truth, curves, shades, x_limits, y_label, file_name, unconstr
         plt.close(fig)
 
 
-def plot_floor_scan(L_ratios, values, y_label, file_name, log_y=False):
+def format_scan_axes(ax, y_label, log_y, x_ticks):
+    """
+    The shared format of the L scans: log L / L_true axis with L_true marked.
+    x_ticks: the labelled ticks of the L axis. Needed for the zoom, which spans less than a decade: matplotlib then
+    labels the minor ticks as well (6x10^-1, 7x10^-1, ...) and the labels run into each other.
+    """
+    ax.axvline(1.0, color=C_MUTED, lw=0.8, ls="--")
+    ax.set_xscale("log")
+    if x_ticks is not None:
+        ax.set_xticks(x_ticks)
+        ax.xaxis.set_major_formatter(plt.FormatStrFormatter("%g"))   # 0.5 instead of 5x10^-1
+        ax.xaxis.set_minor_formatter(plt.NullFormatter())            # minor ticks stay, without labels
+    if log_y:
+        ax.set_yscale("log")
+    ax.set_xlabel(r"$L / L_\mathrm{true}$")
+    ax.set_ylabel(y_label)
+
+
+def plot_floor_scan(L_ratios, values, y_label, file_name, log_y=False, x_ticks=None):
     """One measure of the floor (MSE or FWHM) against L / L_true, with L_true marked."""
     with plt.rc_context(REPORT_STYLE):
         fig, ax = plt.subplots(figsize=PANEL_SIZE)
         ax.plot(L_ratios, values, "o-", color=FLOOR_SHADES[-1], lw=1.2, markersize=3)
-        ax.axvline(1.0, color=C_MUTED, lw=0.8, ls="--")
-        ax.set_xscale("log")
-        if log_y:
-            ax.set_yscale("log")
-        ax.set_xlabel(r"$L / L_\mathrm{true}$")
-        ax.set_ylabel(y_label)
+        format_scan_axes(ax, y_label, log_y, x_ticks)
+        fig.savefig(f"{PLOT_DIR}/{file_name}")
+        plt.close(fig)
+
+
+def plot_network_scan(L_floor, floor_values, L_networks, network_values, y_label, file_name, log_y=False,
+                      x_ticks=None):
+    """
+    One measure (MSE or FWHM) of the trained networks against L / L_true: the mean over seeds, with the spread
+    (min to max over seeds) as error bars, on top of the floor (line) as the reference.
+    """
+    mean = network_values.mean(axis=0)
+    spread = [mean - network_values.min(axis=0), network_values.max(axis=0) - mean]
+    with plt.rc_context(REPORT_STYLE):
+        fig, ax = plt.subplots(figsize=PANEL_SIZE)
+        ax.plot(L_floor, floor_values, color=FLOOR_SHADES[-1], lw=1.2, label="Floor")
+        ax.errorbar(L_networks, mean, yerr=spread, fmt="o", color=NETWORK_SHADES[-1], markersize=3.5, lw=1.0,
+                    capsize=2, label="Networks")
+        format_scan_axes(ax, y_label, log_y, x_ticks)
+        ax.legend(loc="upper right")
         fig.savefig(f"{PLOT_DIR}/{file_name}")
         plt.close(fig)
 
@@ -252,21 +377,31 @@ def main():
     # 2. Floor fits and their slopes
     floors = floor_fits(x, y, L_SHOW)
     x_limits = zoom_limits(x, y, floors)
-    plot_curves(x, y, floors, FLOOR_SHADES, x_limits, r"$f(x)$", "floor_fits.pdf")
+    plot_curves(x, y, floors, FLOOR_SHADES, x_limits, r"$f(x)$", "floor_fits.pdf", L_true)
     floor_slopes = {L: np.gradient(floor, x) for L, floor in floors.items()}
     plot_curves(x, np.gradient(y, x), floor_slopes, FLOOR_SHADES, x_limits, r"$\mathrm{d}f/\mathrm{d}x$",
-                "floor_slopes.pdf")
+                "floor_slopes.pdf", L_true)
 
-    # 3. MSE and FWHM against L, a wide scan and a zoom around L_true
+    # 3. MSE and FWHM against L, a wide scan and a zoom around L_true: the floor alone (fine scan), and the networks
+    #    (coarser scan, trained or loaded) with the floor as the reference
     FWHM_true = FWHM_calculation(x, y)
-    n_scan = 8 if QUICK else 40
-    for L_ratios, suffix in [(np.logspace(np.log10(0.01), np.log10(2), n_scan), ""),
-                             (np.logspace(np.log10(0.5), np.log10(1.01), n_scan), "_zoom")]:
+    FWHM_label = r"$\mathrm{FWHM} / \mathrm{FWHM}_\mathrm{true}$"
+    networks = network_scans(x, y, L_true)
+    for suffix, scan in SCANS.items():
+        low, high = scan["L_range"]
+        x_ticks = scan["x_ticks"]
+        L_ratios = np.logspace(np.log10(low), np.log10(high), N_SCAN_FLOOR)
         MSE, FWHM = floor_scan(x, y, L_ratios * L_true)
-        plot_floor_scan(L_ratios, MSE, "MSE", f"floor_MSE_vs_L{suffix}.pdf")
-        plot_floor_scan(L_ratios, FWHM / FWHM_true, r"$\mathrm{FWHM} / \mathrm{FWHM}_\mathrm{true}$",
-                        f"floor_FWHM_vs_L{suffix}.pdf", log_y=(suffix == ""))
-        print(f"Floor scan{suffix} done")
+        plot_floor_scan(L_ratios, MSE, "MSE", f"floor_MSE_vs_L{suffix}.pdf", x_ticks=x_ticks)
+        plot_floor_scan(L_ratios, FWHM / FWHM_true, FWHM_label, f"floor_FWHM_vs_L{suffix}.pdf",
+                        log_y=(suffix == ""), x_ticks=x_ticks)
+
+        L_networks, MSE_networks, FWHM_networks = networks[suffix]
+        plot_network_scan(L_ratios, MSE, L_networks, MSE_networks, "MSE", f"network_MSE_vs_L{suffix}.pdf",
+                          x_ticks=x_ticks)
+        plot_network_scan(L_ratios, FWHM / FWHM_true, L_networks, FWHM_networks / FWHM_true, FWHM_label,
+                          f"network_FWHM_vs_L{suffix}.pdf", log_y=(suffix == ""), x_ticks=x_ticks)
+        print(f"Scan{suffix} done")
 
     # 4. Integrated errors for several sigma (IAE should not depend on sigma, ISE scales as 1 / sigma)
     sigma_values = np.logspace(-1, 0.5, 3 if QUICK else 10)
@@ -275,23 +410,16 @@ def main():
     plot_integrated_errors(sigma_values, L_ratios, ISE, IAE, "floor_integrated_errors.pdf")
 
     # 5. Networks against the floor (saved, so the plots can be remade without training)
-    if LOAD_SAVED and os.path.exists(RESULTS_FILE):
-        with open(RESULTS_FILE, "rb") as file:
-            fits, slopes, fits_unconstrained, slopes_unconstrained = pickle.load(file)
-        print(f"Loaded the networks from {RESULTS_FILE}")
-    else:
-        fits, slopes, fits_unconstrained, slopes_unconstrained = train_networks(x, y, L_SHOW)
-        with open(RESULTS_FILE, "wb") as file:
-            pickle.dump((fits, slopes, fits_unconstrained, slopes_unconstrained), file)
+    fits, slopes, fits_unconstrained, slopes_unconstrained = saved_or_trained_networks(x, y)
 
     print_network_table(x, y, floors, fits, slopes, fits_unconstrained, slopes_unconstrained, L_true)
     mean_fits = {L: fits[L].mean(axis=0) for L in L_SHOW}
     bands = {L: (fits[L].min(axis=0), fits[L].max(axis=0)) for L in L_SHOW}
-    plot_curves(x, y, mean_fits, NETWORK_SHADES, x_limits, r"$f(x)$", "network_fits.pdf",
+    plot_curves(x, y, mean_fits, NETWORK_SHADES, x_limits, r"$f(x)$", "network_fits.pdf", L_true,
                 unconstrained=fits_unconstrained.mean(axis=0), bands=bands)
     mean_slopes = {L: slopes[L].mean(axis=0) for L in L_SHOW}
     plot_curves(x, np.gradient(y, x), mean_slopes, NETWORK_SHADES, x_limits, r"$\mathrm{d}f/\mathrm{d}x$",
-                "network_slopes.pdf", unconstrained=slopes_unconstrained.mean(axis=0))
+                "network_slopes.pdf", L_true, unconstrained=slopes_unconstrained.mean(axis=0))
     return 0
 
 
