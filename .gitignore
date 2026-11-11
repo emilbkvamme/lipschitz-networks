@@ -1,6 +1,8 @@
 # Excluded project materials
 /Tutorials/
 /Presentations/
+/Lipschitz_concept/Plots/
+/Lipschitz_concept/Toy/Results/
 
 # Python-generated files
 __pycache__/

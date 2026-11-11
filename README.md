@@ -4,12 +4,13 @@ Research code and experiments for studying Lipschitz-constrained neural networks
 applications in HEP.
 
 ## Contents
+(Subject to change)
 
 - `Lipschitz_concept/`: models, training utilities, experiments, notebooks, and plots
+- `Lipschitz_concept/Toy/`: toy experiments and visualizations scripts
 - `requirements.txt`: project dependencies
 - `requirements-lock.txt`: pinned environment dependencies
 
-The `Tutorials/` directory is intentionally excluded from this repository.
 
 ## Setup
 
