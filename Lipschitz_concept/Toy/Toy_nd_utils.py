@@ -17,7 +17,7 @@ from scipy.interpolate import RegularGridInterpolator
 
 from lipschitz_floor import lipschitz_floor_nd  # the floor (best L-Lipschitz fit) on an n-dimensional grid
 from models import LipschitzModel, UnconstrainedModel
-from Toy_utils import train_full_batch
+from Toy_utils import train_full_batch, train_until_converged
 
 
 ##### THE GAUSSIAN #####
@@ -189,17 +189,28 @@ def train_one(job):
         model_kwargs: the arguments of LipschitzModel or UnconstrainedModel,
         seed, steps, lr,
         x, y: training points and targets, numpy arrays of shape (N, n) and (N,),
-        x_eval (optional): where to evaluate the trained network (default: x).
-    Returns a dictionary with the prediction, shape (N_eval,), and the gradient, shape (N_eval, n), at x_eval.
+        x_eval (optional): where to evaluate the trained network (default: x),
+        until_converged (optional): True trains with train_until_converged instead of for a fixed number of steps
+            (steps is then not used), with the settings in convergence (a dictionary, optional) and the targets without
+            noise in y_clean (optional, shape (N,)).
+    Returns a dictionary with the prediction, shape (N_eval,), and the gradient, shape (N_eval, n), at x_eval, and the
+    training history (only with until_converged, otherwise None).
     """
     torch.manual_seed(job["seed"])
     model_cls = LipschitzModel if job["kind"] == "lipschitz" else UnconstrainedModel
     model = model_cls(**job["model_kwargs"])
     x = torch.tensor(job["x"], dtype=torch.float32)
     y = torch.tensor(job["y"], dtype=torch.float32).reshape(-1, 1)
-    train_full_batch(model, x, y, steps=job["steps"], lr=job["lr"])
+    history = None
+    if job.get("until_converged", False):
+        y_clean = job.get("y_clean")
+        if y_clean is not None:
+            y_clean = torch.tensor(y_clean, dtype=torch.float32).reshape(-1, 1)
+        history = train_until_converged(model, x, y, lr=job["lr"], y_clean=y_clean, **job.get("convergence", {}))
+    else:
+        train_full_batch(model, x, y, steps=job["steps"], lr=job["lr"])
     prediction, gradient = evaluate_with_gradient(model, job.get("x_eval", job["x"]))
-    return {"prediction": prediction, "gradient": gradient}
+    return {"prediction": prediction, "gradient": gradient, "history": history}
 
 
 def _train_worker(job):
@@ -215,7 +226,9 @@ def train_many(jobs, n_workers=None):
     if n_workers is None:
         n_workers = min(len(jobs), max(1, (os.cpu_count() or 2) - 1))
     with mp.get_context("spawn").Pool(n_workers) as pool:
-        return pool.map(_train_worker, jobs)
+        # chunksize=1: a free worker takes the next single job, so jobs of very different length (e.g. trained until
+        # converged) are spread evenly over the workers
+        return pool.map(_train_worker, jobs, chunksize=1)
 
 
 ##### NOISE AND FOURIER SPECTRA #####

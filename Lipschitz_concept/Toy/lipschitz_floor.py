@@ -106,6 +106,14 @@ def lipschitz_floor_nd(y, axes, L, tol=1e-9, max_iter=100, return_info=False, no
         D = _stencil_difference_matrix(axes, "l2", reach=3)
     else:
         raise ValueError(f"norm ({norm}) must be 'l1', 'l2' or 'linf'")
+    # If the data already satisfies the bound (for the Gaussian: L >= L_true), the data itself is the best fit, with
+    # error exactly zero. It is returned directly: the iterations below only get close to it and would leave a tiny
+    # leftover of the barrier (around the solver tolerance) instead of the exact zero.
+    if np.max(np.abs(D @ y_flat)) <= L:
+        if return_info:
+            return y.copy(), 0.0, {"iterations": 0, "converged": True, "max_violation": 0.0}
+        return y.copy(), 0.0
+
     DT = D.T.tocsc()
     identity = sp.identity(y.size, format="csc")
     scale = max(np.max(np.abs(y)), 1e-300)

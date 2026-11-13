@@ -95,14 +95,32 @@ def calculate_lipschitz_constant(model, x_data):
 #### RESOLUTION FUNCTIONS ####
 def FWHM_calculation(x, f):
     """
-    Calculate the Full Width at Half Maximum (FWHM) of a function f defined on x.
-    Returns the FWHM value.
+    Full Width at Half Maximum (FWHM) of a peak f sampled at the points x (any order, not necessarily evenly spaced).
+    Returns the FWHM value, or 0.0 if fewer than two points are above half maximum.
     """
+    x = np.asarray(x, dtype=float).ravel()
+    f = np.asarray(f, dtype=float).ravel()
+    order = np.argsort(x)          # the neighbours of a point are only next to it in the array when x is sorted
+    x, f = x[order], f[order]
+
     half_max = np.max(f) / 2.0
     indices = np.where(f >= half_max)[0]
     if len(indices) < 2:
         return 0.0  # Not enough points to define FWHM
-    fwhm = x[indices[-1]] - x[indices[0]]
+    first, last = indices[0], indices[-1]
+
+    # Interpolation between the FWHM points to get a more accurate estimate (avoiding the grid spacing/stepwise issue):
+    # each crossing lies between the outermost point above half max and its neighbour below half max. np.interp is used
+    # backwards (x as a function of f) on only those two points, and needs f increasing: reversed on the right flank
+    if first > 0:
+        x_left = np.interp(half_max, f[first - 1:first + 1], x[first - 1:first + 1])
+    else:
+        x_left = x[first]          # the peak is above half max at the edge of the data, nothing to interpolate with
+    if last < len(x) - 1:
+        x_right = np.interp(half_max, f[last:last + 2][::-1], x[last:last + 2][::-1])
+    else:
+        x_right = x[last]
+    fwhm = x_right - x_left
     return fwhm
 
 #### OPTIMIZING THE FLOOR ####
@@ -126,6 +144,57 @@ def train_full_batch(model, x, y, steps=6000, lr=3e-3):
         optimizer.step()
         scheduler.step()
     return model
+
+
+def train_until_converged(model, x, y, lr=3e-3, check_every=500, rel_tol=1e-3, patience=2, n_halvings=6,
+                          max_steps=200000, y_clean=None):
+    """
+    Full-batch training with Adam and MSE loss until the loss stops improving, instead of for a fixed number of steps.
+    Every check_every steps, the mean loss of those steps is compared with the best so far. If it has not improved by
+    more than rel_tol (relative) for `patience` checks in a row, the learning rate is halved. Training stops when the
+    loss no longer improves after n_halvings halvings (converged), or at max_steps (not converged).
+    y_clean (optional): the targets without noise, the MSE to them is recorded as well.
+    Returns the history: lists with the step, the training loss, the MSE to y_clean and the learning rate at every
+    check, and whether the training converged before max_steps.
+    """
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    history = {"step": [], "loss": [], "mse_clean": [], "lr": [], "converged": False}
+    best = np.inf
+    checks_without_improvement = 0
+    halvings = 0
+    losses = []
+    for step in range(1, max_steps + 1):
+        optimizer.zero_grad()
+        loss = ((model(x) - y) ** 2).mean()
+        loss.backward()
+        optimizer.step()
+        losses.append(loss.item())
+
+        if step % check_every == 0:
+            mean_loss = np.mean(losses)
+            losses = []
+            history["step"].append(step)
+            history["loss"].append(mean_loss)
+            history["lr"].append(lr)
+            if y_clean is not None:
+                with torch.no_grad():
+                    history["mse_clean"].append(((model(x) - y_clean) ** 2).mean().item())
+
+            if mean_loss < best * (1 - rel_tol):
+                best = mean_loss
+                checks_without_improvement = 0
+            else:
+                checks_without_improvement += 1
+            if checks_without_improvement >= patience:
+                if halvings == n_halvings:
+                    history["converged"] = True
+                    return history
+                halvings += 1
+                lr = lr / 2
+                for group in optimizer.param_groups:
+                    group["lr"] = lr
+                checks_without_improvement = 0
+    return history
 
 
 ###### NOISE AND FOURIER SPECTRA ######
