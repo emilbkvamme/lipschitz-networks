@@ -10,11 +10,13 @@
 import math
 import multiprocessing as mp
 import os
+import sys
 
 import numpy as np
 import torch
 from scipy.interpolate import RegularGridInterpolator
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Utils"))   # the Utils folder, with models.py
 from lipschitz_floor import lipschitz_floor_nd  # the floor (best L-Lipschitz fit) on an n-dimensional grid
 from models import LipschitzModel, UnconstrainedModel
 from Toy_utils import train_full_batch, train_until_converged

@@ -22,11 +22,15 @@
 #   - The bound is set relative to the slope of the Gaussian in the l2 norm, L = L_RATIO * L_true_l2, the same number
 #     for every norm and angle (the l2 slope does not change with the angle).
 #   - No noise yet: this stage is only about the metric. Noise comes in stage 2, with the metric chosen here.
+#   - The networks are trained on random points drawn uniformly in the box of the grid (as in Optimal_solution.py),
+#     as many as the grid has, and evaluated on the grid, so every measure of the networks is on unseen points.
 #
-# Run from the Lipschitz_concept folder:  python Toy_nd_norms_rotations_complete.py
-# The figures and the numbers (results.npz) are saved in Plots/Toy_nd_norms.
+# PLOTS: in Plots/2D/Norms_and_rotations, all names starting with rotation_. The floors and the networks are saved in
+# Results/2D/Norms_and_rotations, so the plots can be remade without computing them again.
+# Runtime of a full run: about 40 minutes (the floors one after the other, then the networks 7 at a time).
 
 import os
+import sys
 import time
 
 import numpy as np
@@ -34,18 +38,25 @@ import matplotlib
 matplotlib.use("Agg")              # no windows: the figures are only saved to files
 import matplotlib.pyplot as plt
 
-# "Homemade" modules
-from Toy_utils import REPORT_STYLE
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # the Toy folder
+from Toy_utils import REPORT_STYLE, plot_dir, results_dir, save_results, load_results
 from Toy_nd_utils import gaussian_nd, pyramid_radius, make_grid, grid_integral, profile, train_many
 from lipschitz_floor import lipschitz_floor_nd
 
 
 ##### SETTINGS #####
 QUICK = False        # True: coarse grid, few angles and short training, only to check that everything runs
+LOAD_SAVED = True    # True: use the saved floors and networks if they were computed with the same settings
+PLOT_DIR = plot_dir("2D", "Norms_and_rotations")
+RESULTS_FILE = os.path.join(results_dir("2D", "Norms_and_rotations"), "rotations_quick.pkl" if QUICK else "rotations.pkl")
 
 NORMS = ["l1", "l2", "linf"]
 NORM_LABELS = {"l1": r"$\ell_1$", "l2": r"$\ell_2$", "linf": r"$\ell_\infty$"}
 NORM_COLORS = {"l1": "#2a78d6", "l2": "#7b4fb3", "linf": "#eb6834"}   # the true Gaussian is black
+# The network-only figures use shades of the network colour of Optimal_solution.py (orange, light -> dark = l1, l2,
+# linf), with a different marker per norm, so the norms can also be told apart in black and white
+NETWORK_SHADES = dict(zip(NORMS, plt.cm.Oranges(np.linspace(0.4, 0.95, len(NORMS)))))
+NORM_MARKERS = {"l1": "o", "l2": "s", "linf": "^"}
 
 # The Gaussians
 SIGMA_SHORT = 0.1                                       # width in the narrow direction
@@ -58,8 +69,9 @@ L_RATIOS_FLOOR = [0.25, 0.5]
 
 # The networks: one elongated Gaussian, a few angles, one bound
 ASPECT_NETWORKS = 3.0
-ANGLES_NETWORKS = [0.0, 22.5, 45.0]
+ANGLES_NETWORKS = [0.0, 45.0] if QUICK else [0.0, 11.25, 22.5, 33.75, 45.0]
 L_RATIO_NETWORKS = 0.5
+SAMPLE_SEED = 0                    # the same random training points for every network
 SEEDS = [0, 1] if QUICK else [0, 1, 2]
 HIDDEN_DIM = 64
 N_GROUPS = 8
@@ -70,9 +82,12 @@ LEARNING_RATE = 3e-3
 # Figures: fixed size and margins (saved without the tight cropping), so all the single plots are the same size in LaTeX
 FIG_SIZE = (3.1, 2.8)
 FIG_MARGINS = dict(left=0.24, right=0.96, top=0.96, bottom=0.18)
-
-# Output folder, next to this script, so the script can be run from anywhere
-PLOT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Plots", "Toy_nd_norms")
+# Single plots with the legend in one row under the axes (when the lines leave no free corner for it): taller, so the
+# axes are as large as in the other single plots
+LEGEND_BELOW_SIZE = (3.1, 3.25)
+LEGEND_BELOW_MARGINS = dict(left=0.24, right=0.96, top=0.9655, bottom=0.2935)
+LEGEND_BELOW = dict(loc="upper center", bbox_to_anchor=(0.5, -0.22), ncol=3, frameon=False,
+                    handlelength=1.4, columnspacing=0.8, handletextpad=0.4)
 
 
 ##### THE GAUSSIAN #####
@@ -155,6 +170,22 @@ def largest_slope(gradient, norm):
     return np.max(np.linalg.norm(gradient, ord=dual_order, axis=-1))
 
 
+def network_mae(network_results, axes):
+    """
+    MAE of every network to the true Gaussian on the grid (unseen points), from the saved predictions.
+    Returns mae[norm], shape (number of angles, number of seeds).
+    """
+    _, X = make_grid(axes[0][-1], len(axes[0]), 2)            # the grid the networks were evaluated on
+    mae = {}
+    for norm in NORMS:
+        rows = []
+        for angle in ANGLES_NETWORKS:
+            y = gaussian_nd(X, np.zeros(2), rotated_covariance(SIGMA_SHORT * ASPECT_NETWORKS, SIGMA_SHORT, angle))
+            rows.append([np.mean(np.abs(prediction - y)) for prediction in network_results[(norm, angle)]["prediction"]])
+        mae[norm] = np.array(rows)
+    return mae
+
+
 ##### THE FLOORS #####
 def floor_scan():
     """
@@ -200,26 +231,34 @@ def floor_scan():
 def network_scan():
     """
     Lipschitz networks with every input norm, trained on the elongated Gaussian at every angle in ANGLES_NETWORKS,
-    with the same bound L = L_RATIO_NETWORKS * L_true_l2. All networks are trained in parallel (train_many).
+    with the same bound L = L_RATIO_NETWORKS * L_true_l2. All networks are trained in parallel (train_many), on random
+    points drawn uniformly in the box of the grid (as many as the grid has, the same sample for every network), and
+    evaluated on the grid.
     Returns network_results[(norm, angle)] = dictionary with the predictions and measures for every seed, and the grid.
     """
     L_true_l2 = gaussian_slope(rotated_covariance(SIGMA_SHORT * ASPECT_NETWORKS, SIGMA_SHORT, 0.0), "l2")
     L = L_RATIO_NETWORKS * L_true_l2
     axes, X = grid_for(ASPECT_NETWORKS, L)
-    x = X.reshape(-1, 2)
+    x_grid = X.reshape(-1, 2)
+    half_width = axes[0][-1]
+    rng = np.random.default_rng(SAMPLE_SEED)
+    x_train = rng.uniform(-half_width, half_width, size=(len(x_grid), 2))
 
     # One training job per norm, angle and seed, in this order
     jobs = []
     targets = {}
     for norm in NORMS:
         for angle in ANGLES_NETWORKS:
-            y = gaussian_nd(X, np.zeros(2), rotated_covariance(SIGMA_SHORT * ASPECT_NETWORKS, SIGMA_SHORT, angle))
-            targets[angle] = y
+            cov = rotated_covariance(SIGMA_SHORT * ASPECT_NETWORKS, SIGMA_SHORT, angle)
+            targets[angle] = gaussian_nd(X, np.zeros(2), cov)          # on the grid: the truth for the measures
+            y_train = gaussian_nd(x_train, np.zeros(2), cov)
             for seed in SEEDS:
-                jobs.append(dict(kind="lipschitz", seed=seed, steps=STEPS, lr=LEARNING_RATE, x=x, y=y.ravel(),
+                jobs.append(dict(kind="lipschitz", seed=seed, steps=STEPS, lr=LEARNING_RATE, x=x_train, y=y_train,
+                                 x_eval=x_grid,
                                  model_kwargs=dict(input_dim=2, hidden_dim=HIDDEN_DIM, output_dim=1, n_groups=N_GROUPS,
                                                    depth=DEPTH, lipschitz_bound=L, input_norm=norm)))
-    print(f"Training {len(jobs)} networks on a {len(axes[0])}^2 grid, L = {L:.2f}")
+    print(f"Training {len(jobs)} networks on {len(x_train)} random points, evaluated on the {len(axes[0])}^2 grid, "
+          f"L = {L:.2f}")
     start = time.time()
     results = train_many(jobs)
     print(f"   done in {time.time() - start:.0f} s")
@@ -241,8 +280,6 @@ def network_scan():
                 entry["slope_used"].append(largest_slope(gradient, norm) / L)   # 1 = the whole budget is used
                 k += 1
             network_results[(norm, angle)] = {name: np.array(values) for name, values in entry.items()}
-            print(f"   {norm:4s}, angle {angle:4.1f}: relative error {np.mean(entry['relative_error']):.3e}, "
-                  f"slope used {np.mean(entry['slope_used']):.3f} L")
     return network_results, axes, targets
 
 
@@ -267,7 +304,7 @@ def plot_slope_needed():
     ax.set_xlabel("Angle (degrees)")
     ax.set_ylabel(r"$L_\mathrm{true} / L_\mathrm{true}^{\ell_2}$")
     ax.legend(frameon=False)
-    fig.savefig(f"{PLOT_DIR}/slope_needed_vs_angle.pdf")
+    fig.savefig(f"{PLOT_DIR}/rotation_slope_needed_vs_angle.pdf")
     plt.close(fig)
 
 
@@ -301,7 +338,29 @@ def plot_network_error(network_results, floor_results):
     ax.set_xlabel("Angle (degrees)")
     ax.set_ylabel("Relative squared error")
     ax.legend(frameon=False)
-    fig.savefig(f"{PLOT_DIR}/network_error_vs_angle.pdf")
+    fig.savefig(f"{PLOT_DIR}/rotation_network_error_vs_angle.pdf")
+    plt.close(fig)
+
+
+def plot_network_mae(mae):
+    """
+    MAE of the networks against the angle, one line per norm: the mean over the seeds, with the spread (min to max) as
+    error bars. Networks only, no floors. The MAE is shown in units of 10^-2 (given in the axis label), so the tick
+    labels stay short and the axis label fits.
+    """
+    unit = 1e-2
+    fig, ax = plt.subplots(figsize=LEGEND_BELOW_SIZE)
+    fig.subplots_adjust(**LEGEND_BELOW_MARGINS)
+    for norm in NORMS:
+        values = mae[norm] / unit
+        mean = values.mean(axis=1)
+        spread = [mean - values.min(axis=1), values.max(axis=1) - mean]
+        ax.errorbar(ANGLES_NETWORKS, mean, yerr=spread, fmt=NORM_MARKERS[norm] + "-", color=NETWORK_SHADES[norm],
+                    lw=1.2, markersize=4, capsize=2, label=NORM_LABELS[norm])
+    ax.set_xlabel("Angle (degrees)")
+    ax.set_ylabel(r"MAE / $10^{-2}$")
+    ax.legend(**LEGEND_BELOW)
+    fig.savefig(f"{PLOT_DIR}/rotation_network_mae_vs_angle.pdf")
     plt.close(fig)
 
 
@@ -339,12 +398,19 @@ def plot_contours(floors_for_contours, network_results, network_axes):
                     plt.Line2D([], [], color="grey", lw=1.4)]
     fig.legend(legend_lines, ["Gaussian", "Floor", "Network"], loc="lower center", bbox_to_anchor=(0.5, 0.95),
                ncol=3, frameon=False)
-    fig.savefig(f"{PLOT_DIR}/half_max_contours.pdf", bbox_inches="tight")
+    fig.savefig(f"{PLOT_DIR}/rotation_half_max_contours.pdf", bbox_inches="tight")
     plt.close(fig)
 
 
+def settings():
+    """The settings the saved results depend on. The saved results are only used if these are the same as now."""
+    return dict(norms=NORMS, sigma_short=SIGMA_SHORT, aspects=ASPECTS, angles=ANGLES_DEGREES.tolist(),
+                points_per_sigma=POINTS_PER_SIGMA, L_ratios_floor=L_RATIOS_FLOOR, aspect_networks=ASPECT_NETWORKS,
+                angles_networks=ANGLES_NETWORKS, L_ratio_networks=L_RATIO_NETWORKS, sample_seed=SAMPLE_SEED,
+                seeds=SEEDS, steps=STEPS, learning_rate=LEARNING_RATE, network=(HIDDEN_DIM, N_GROUPS, DEPTH))
+
+
 def main():
-    os.makedirs(PLOT_DIR, exist_ok=True)
     plt.rcParams.update(REPORT_STYLE)
     plt.rcParams["savefig.bbox"] = "standard"      # fixed figure sizes, see FIG_SIZE
     print(f"QUICK = {QUICK}. Saving the figures in {PLOT_DIR}")
@@ -352,28 +418,40 @@ def main():
     # 1) How large a bound each norm needs, against the angle (analytic, no fitting)
     plot_slope_needed()
 
+    # 2) and 3) The floors (what the bound itself does) and the networks, computed or loaded
+    saved = None
+    if LOAD_SAVED and os.path.exists(RESULTS_FILE):
+        saved = load_results(RESULTS_FILE)
+        if saved["settings"] != settings():
+            print(f"The saved results in {RESULTS_FILE} used other settings: computing again")
+            saved = None
+    if saved is None:
+        floor_results, floors_for_contours = floor_scan()
+        network_results, network_axes, _ = network_scan()
+        saved = dict(settings=settings(), floor_results=floor_results, floors_for_contours=floors_for_contours,
+                     network_results=network_results, network_axes=network_axes)
+        save_results(saved, RESULTS_FILE)
+
     # 2) The floors: what the bound itself does, for every norm and angle
-    floor_results, floors_for_contours = floor_scan()
-    plot_floor_measure(floor_results, "relative_error", "Relative squared error", "floor_error_vs_angle")
+    floor_results = saved["floor_results"]
+    plot_floor_measure(floor_results, "relative_error", "Relative squared error", "rotation_floor_error_vs_angle")
     plot_floor_measure(floor_results, "width_short", r"$\mathrm{FWHM}_\mathrm{short}/\mathrm{FWHM}_\mathrm{true}$",
-                       "floor_width_short_vs_angle")
-    plot_floor_measure(floor_results, "peak", "Peak / true peak", "floor_peak_vs_angle")
+                       "rotation_floor_width_short_vs_angle")
+    plot_floor_measure(floor_results, "peak", "Peak / true peak", "rotation_floor_peak_vs_angle")
 
     # 3) The networks: do they behave like their floors, and is the l2 network rotation invariant?
-    network_results, network_axes, _ = network_scan()
-    plot_network_error(network_results, floor_results)
-    plot_contours(floors_for_contours, network_results, network_axes)
-
-    # 4) Save the numbers, so the figures can be remade without computing everything again
-    saved = {}
-    for (aspect, L_ratio, norm), results in floor_results.items():
-        for name, values in results.items():
-            saved[f"floor_{name}_aspect{aspect:g}_L{L_ratio:g}_{norm}"] = values
-    for (norm, angle), results in network_results.items():
-        for name in ["relative_error", "width_short", "slope_used"]:
-            saved[f"network_{name}_{norm}_angle{angle:g}"] = results[name]
-    np.savez(f"{PLOT_DIR}/results.npz", angles_floor=ANGLES_DEGREES, angles_networks=np.array(ANGLES_NETWORKS), **saved)
-    print("Saved the figures and results.npz")
+    print("Networks (mean over seeds):")
+    for (norm, angle), results in saved["network_results"].items():
+        print(f"   {norm:4s}, angle {angle:5.2f}: relative error {results['relative_error'].mean():.3e}, "
+              f"slope used {results['slope_used'].mean():.3f} L")
+    plot_network_error(saved["network_results"], floor_results)
+    mae = network_mae(saved["network_results"], saved["network_axes"])
+    print("Network MAE (mean over seeds) at the angles", ANGLES_NETWORKS)
+    for norm in NORMS:
+        print(f"   {norm:4s}: " + "  ".join(f"{value:.3e}" for value in mae[norm].mean(axis=1)))
+    plot_network_mae(mae)
+    plot_contours(saved["floors_for_contours"], saved["network_results"], saved["network_axes"])
+    print("Saved the figures")
 
 
 # The training runs in parallel processes (train_many), which on macOS start a fresh Python that imports this file.

@@ -1,14 +1,23 @@
-# GOAL: A slide figure of how the input norm decides the shape of the best L-Lipschitz fit. With the l1 norm the floor
-# of a round Gaussian is a pyramid (diamond contours), with the l2 norm a cone (round contours), and trained Lipschitz
-# networks with the same norm do the same.
+# GOAL: How the input norm decides the shape of the best L-Lipschitz fit. With the l1 norm the floor of a round
+# Gaussian is a pyramid with diamond contours, with the l2 norm a cone (round contours), and with the linf norm a pyramid
+# with square contours. Trained Lipschitz networks with the same norm do the same.
 
 # HOW: The 2D Gaussian of Optimal_solution.py (sigma = 0.1) at L = 0.12 L_true, where the floor runs at its full slope.
 #   One panel per norm, seen from above: the contours of a Lipschitz network trained with that input_norm (random
 #   training points, as in Optimal_solution.py), on top of the contours of the floor in the same norm
-# l1 bounds every partial derivative on its own, max_i |df/dx_i| <= L, so along the diagonals the slope can reach
-# sqrt(2) L. l2 bounds the length of the gradient, |grad f| <= L, the same in every direction.
+# The bound is measured on the gradient in the dual norm:
+#   l1 bounds every partial derivative on its own, max_i |df/dx_i| <= L, so along the diagonals the slope can reach
+#      sqrt(2) L: the steepest descent is along the diagonals, which gives the diamond
+#   l2 bounds the length of the gradient, |grad f| <= L, the same in every direction: round
+#   linf bounds the sum |df/dx_1| + |df/dx_2| <= L, so the slope can reach L along the axes but only L / sqrt(2) along
+#      the diagonals: the steepest descent is along the axes, which gives the square
+# The same L is used for all three norms, so only the norm changes. L_true is the same in l1 and l2 for a round
+# Gaussian, but sqrt(2) larger in linf (the dual norm of the gradient is largest on the diagonals), so for linf the same
+# L is 0.12 / sqrt(2) = 0.085 of its own L_true.
 
 # PLOTS: in Plots/2D/Norms_and_rotations (PDF for the report, PNG at 300 dpi for the slide)
+#   norm_shapes_l1_l2_linf: the three norms, for the report
+#   norm_shapes_pyramid_and_cone_slide: l1 and l2 only, for the slide
 
 
 import os
@@ -34,7 +43,7 @@ LOAD_SAVED = True                  # True: use the saved floors and networks if 
 DIM = 2
 SIGMA = 0.1
 L_RATIO = 0.12                     # L / L_true: low enough for the floor to run at its full slope around the peak
-NORMS = ["l1", "l2"]
+NORMS = ["l1", "l2", "linf"]
 POINTS_PER_SIGMA = 4 if QUICK else 8
 
 # Networks, as in Optimal_solution.py: random training points, uniform in the box
@@ -48,7 +57,7 @@ HIDDEN_DIM, N_GROUPS, DEPTH = 64, 8, 5
 # Figure format
 C_FLOOR, C_NET = "#2a78d6", "tab:orange"
 LEVELS = np.array([0.1, 0.3, 0.5, 0.7, 0.9])   # contour levels, as fractions of the peak of the floor
-# No titles: the panels are labelled l1 (left) and l2 (right) in the report caption or on the slide
+# No titles: the panels are labelled l1, l2 (and linf) from left to right in the report caption or on the slide
 
 
 #### CALCULATIONS ####
@@ -57,7 +66,7 @@ def make_data():
     The Gaussian on a grid that is wide enough for the floor, and N_TRAIN random training points in the same box.
     Returns L, axes, X, the Gaussian on the grid, and the training points with their Gaussian values.
     """
-    L = L_RATIO * isotropic_lipschitz_constant(SIGMA, DIM)      # L_true is the same in l1 and l2 for a round Gaussian
+    L = L_RATIO * isotropic_lipschitz_constant(SIGMA, DIM)      # L_true in l1 and l2; the same L is used for linf
     half_width = max(6 * SIGMA, 1.2 * pyramid_radius(L, DIM))
     axes, X = make_grid(half_width, 2 * int(half_width / SIGMA * POINTS_PER_SIGMA) + 1, DIM)
     y = gaussian_nd(X, np.zeros(DIM), isotropic_cov(SIGMA, DIM))
@@ -67,16 +76,19 @@ def make_data():
     return L, axes, X, y, x_train, y_train
 
 
-def train_networks(X, x_train, y_train, L, shape):
-    """One Lipschitz network per norm, trained on the random points and evaluated on the grid. Returns fits[norm]."""
+def train_networks(X, x_train, y_train, L, shape, norms):
+    """
+    One Lipschitz network per norm in norms, trained on the random points and evaluated on the grid.
+    Returns fits[norm].
+    """
     jobs = [dict(kind="lipschitz", seed=SEED, steps=STEPS, lr=LEARNING_RATE, x=x_train, y=y_train,
                  x_eval=X.reshape(-1, DIM),
                  model_kwargs=dict(input_dim=DIM, hidden_dim=HIDDEN_DIM, output_dim=1, n_groups=N_GROUPS,
                                    depth=DEPTH, lipschitz_bound=L, input_norm=norm))
-            for norm in NORMS]
+            for norm in norms]
     print(f"Training {len(jobs)} networks on {len(x_train)} random points")
     results = train_many(jobs)
-    return {norm: result["prediction"].reshape(shape) for norm, result in zip(NORMS, results)}
+    return {norm: result["prediction"].reshape(shape) for norm, result in zip(norms, results)}
 
 
 def print_shape_check(axes, functions, L, name):
@@ -91,9 +103,9 @@ def print_shape_check(axes, functions, L, name):
 
 
 #### PLOT ####
-def plot_norm_shapes(axes, floors, fits, file_name, figsize, font_size):
+def plot_norm_shapes(axes, floors, fits, norms, file_name, figsize, font_size):
     """
-    One panel per norm (l1, l2), seen from above: the contours of the trained network (solid) on top of those of the
+    One panel per norm in norms, seen from above: the contours of the trained network (solid) on top of those of the
     floor (dashed), at the same levels. The figure is made at the size it is shown at, so the text keeps its size:
     full text width with 12 pt text for the report, about half a Beamer slide with 8 pt text for the slide.
     """
@@ -102,8 +114,8 @@ def plot_norm_shapes(axes, floors, fits, file_name, figsize, font_size):
     sizes = {name: font_size for name in ["font.size", "axes.labelsize", "xtick.labelsize", "ytick.labelsize",
                                           "legend.fontsize"]}
     with plt.rc_context(REPORT_STYLE), plt.rc_context(sizes):
-        fig, axs = plt.subplots(1, len(NORMS), figsize=figsize, sharey=True, gridspec_kw=dict(wspace=0.1))
-        for ax, norm in zip(axs, NORMS):
+        fig, axs = plt.subplots(1, len(norms), figsize=figsize, sharey=True, gridspec_kw=dict(wspace=0.1))
+        for ax, norm in zip(axs, norms):
             levels = LEVELS * floors[norm].max()
             ax.contour(axes[0], axes[1], floors[norm].T, levels=levels, colors=[C_FLOOR], linestyles="--",
                        linewidths=1.0 * line_scale)
@@ -128,19 +140,24 @@ def main():
     L, axes, X, y, x_train, y_train = make_data()
     print(f"sigma = {SIGMA}, L = {L_RATIO} L_true = {L:.2f}, grid {len(axes[0])}^{DIM} points")
 
+    # The floors and networks are saved per norm: a norm added to NORMS is computed without redoing the others
     if LOAD_SAVED and os.path.exists(RESULTS_FILE):
         saved = load_results(RESULTS_FILE)
     else:
-        saved = {"floors": {norm: lipschitz_floor_nd(y, axes, L, norm=norm)[0] for norm in NORMS},
-                 "fits": train_networks(X, x_train, y_train, L, y.shape)}
+        saved = {"floors": {}, "fits": {}}
+    missing = [norm for norm in NORMS if norm not in saved["floors"]]
+    if missing:
+        for norm in missing:
+            saved["floors"][norm] = lipschitz_floor_nd(y, axes, L, norm=norm)[0]
+        saved["fits"].update(train_networks(X, x_train, y_train, L, y.shape, missing))
         save_results(saved, RESULTS_FILE)
 
     print_shape_check(axes, saved["floors"], L, "Floor")
     print_shape_check(axes, saved["fits"], L, "Network")
-    plot_norm_shapes(axes, saved["floors"], saved["fits"], "norm_shapes_pyramid_and_cone", figsize=(6.3, 3.4),
+    plot_norm_shapes(axes, saved["floors"], saved["fits"], NORMS, "norm_shapes_l1_l2_linf", figsize=(6.3, 2.6),
                      font_size=12)                                    # report: full text width
-    plot_norm_shapes(axes, saved["floors"], saved["fits"], "norm_shapes_pyramid_and_cone_slide", figsize=(3.0, 1.75),
-                     font_size=8)                                     # Beamer: about half the slide width
+    plot_norm_shapes(axes, saved["floors"], saved["fits"], ["l1", "l2"], "norm_shapes_pyramid_and_cone_slide",
+                     figsize=(3.0, 1.75), font_size=8)                # Beamer: about half the slide width
     return 0
 
 
