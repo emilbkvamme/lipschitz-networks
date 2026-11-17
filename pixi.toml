@@ -1,0 +1,25 @@
+# The Python environment for running the scripts on the LPNHE cluster (lpnheai, Slurm), made with pixi.
+# Install it once on the login node, in the folder of this file:   pixi install
+# Then run a script with it (no activation needed):                 pixi run python Sine_noise.py
+#
+# PyTorch is the CUDA build from conda-forge. The login node has no GPU, so [system-requirements] tells pixi that the
+# compute node has CUDA 12 (the H200). The same build also runs on the CPU partition, it then just finds no GPU.
+# Only the packages the scripts in Lipschitz_concept need (the full local list is in requirements.txt).
+
+[workspace]
+name = "lipschitz-networks"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[system-requirements]
+cuda = "12.0"
+
+[dependencies]
+python = "3.12.*"
+numpy = "*"
+scipy = "*"
+matplotlib = "*"
+pytorch-gpu = "*"
+
+[pypi-dependencies]
+monotonicnetworks = "==1.5.1"   # the same version as on the Mac

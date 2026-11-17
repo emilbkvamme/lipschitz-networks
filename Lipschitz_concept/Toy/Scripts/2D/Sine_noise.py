@@ -1,323 +1,468 @@
-# GOAL: How much plane-wave (sine) noise do the Lipschitz networks remove from a 2D Gaussian, as a function of L?
-# (Script version of the plane-wave section of Toy_gaussian_2d.ipynb.)
+# GOAL: Investigate the effect of overlaid sine noise on the training of the Lipschitz Network. We want the network to function as a regularizer, smoothing out the noise and recovering the underlying Gaussian.
+# 
+# HOW: 
+#   Generate the sine noise
+#       Plane waves in multiple directions with random phases. Must be smaller in magnitude than the Guussian
+#   Scan over a range of Lipschitz constants
 
-# HOW: The target is a wide Gaussian with plane waves on top, y(x) = f(x) + sum_j A_j sin(k_j . x).
-# A plane wave needs the slope A ||k||_dual, where ||.||_dual is the dual of the networks' input norm
-# (l2 -> ||k||_2, l1 -> ||k||_inf). If the bound is what removes the waves, the fraction of a wave that survives
-# depends only on A ||k||_dual / L.
-#   1. The data: the Gaussian, the noise and the noisy Gaussian, with their spectra
-#   2. Networks for a few L: the fits, cuts and spectra, and the fraction of every wave that survives
-#   3. L scan: MSE to the clean Gaussian and the noise removed, against L, with the unconstrained network
+# PLOTS: MSE/MAE evolution, FWHM evolution, Fits at different L,  
 
-# PLOTS: in Plots/2D/Sine_noise
-
-
+#======= IMPORTS =======
 import os
 import sys
-import pickle
+import time
+
+import numpy as np
+import torch
 import matplotlib
 matplotlib.use("Agg")              # no windows: the figures are only saved to files
-import matplotlib.pyplot as plt
-import numpy as np
+from matplotlib import pyplot as plt
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # the Toy folder
-from Toy_utils import REPORT_STYLE, noise_removed, plot_dir, results_dir
-from Toy_nd_utils import *
+from Toy_utils import REPORT_STYLE, noise_removed, plot_dir, results_dir, save_results, load_results
+from Toy_nd_utils import (gaussian_nd, isotropic_cov, isotropic_lipschitz_constant, make_grid, wavevector,
+                          mode_amplitude_nd, radial_spectrum, central_line, fwhm_equivalent, train_many)
 
-QUICK = False                      # True: small grid, short training, only to check that everything runs
-PLOT_DIR = plot_dir("2D", "Sine_noise")
-RESULTS_FILE = os.path.join(results_dir("2D", "Sine_noise"), "networks_quick.pkl" if QUICK else "networks.pkl")
-LOAD_SAVED = True                  # True: use the saved networks if they exist, instead of training again
-INPUT_NORM = "l2"                  # the norm of the networks (the notebook used the default, l1)
+#======= SETTINGS =======
+QUICK = "--quick" in sys.argv      # python Sine_noise.py --quick: fewer points, short training, only to check that everything runs
+LOAD_SAVED = True                  # True: use the saved networks if they were trained on the same data and settings
+# Not networks.pkl: that file in the same folder is from the old Sine_noise.py and has another structure
+NETWORKS_FILE = os.path.join(results_dir("2D", "Sine_noise"), "L_scan_quick.pkl" if QUICK else "L_scan.pkl")
 
-# The data, as in the notebook (but with the isotropic Gaussian its text describes)
+# The Gaussian: round, sigma = 1, in the box [-4, 4)^2 (at the edge it is 3e-4 of its peak)
 DIM = 2
-N_POINTS = 40 if QUICK else 160    # points per axis
-X_MIN, X_MAX = -5, 5
 SIGMA = 1.0
-AMPLITUDES = [0.5, 0.3, 0.7, 0.4, 0.6]
-MODES = [(12, 0), (25, 25), (0, 30), (13, 26), (20, 15)]   # whole numbers of periods across the grid along x_1 and x_2
+MEAN = np.zeros(DIM)
+COV = isotropic_cov(SIGMA, DIM)
+HALF_WIDTH = 4.0
+LENGTH = 2 * HALF_WIDTH            # side of the box
+PEAK = float(gaussian_nd(MEAN, MEAN, COV))
+L_TRUE = isotropic_lipschitz_constant(SIGMA, DIM)   # the same in the l1 and l2 norm for a round Gaussian
 
-# Networks, as in the notebook
-L_VALUES = [0.1, 0.25, 0.5, 1.0]   # the networks shown in detail. The Gaussian needs 0.1, the waves 4 to 13
-L_RATIOS_SCAN = np.logspace(-1.5, 0, 3 if QUICK else 12)   # the L scan, as L / L_max (L_max: slope of the noisy data)
-SEEDS = [0, 1] if QUICK else [0, 1, 2]
-STEPS = 100 if QUICK else 6000
-LEARNING_RATE = 3e-3
+# The data: random training points, and a periodic grid (endpoint=False) for evaluation and Fourier spectra
+N_TRAIN = 2000 if QUICK else 10000   # 10000: about 4 points per wavelength of the shortest wave
+N_GRID = 64 if QUICK else 200        # grid points per axis, must be above 2 x the largest mode (24)
+SAMPLE_SEED = 0                      # the training points
+NOISE_SEED = 42                      # the phases of the waves
+
+# The sine noise: plane waves A sin(k . x + phase), with a whole number of periods across the box along each axis
+# (MODES), so that every wave is periodic on the grid and gives one clean peak in its Fourier spectrum.
+# Each wave is set by the slope it needs: A sin(k . x) has slope A |k|, so a wave that needs L = r L_true has
+# A = r L_true / |k|. (10, 0) and (6, 8) have the same |k| in different directions: an l2 network should treat them equally.
+MODES = np.array([[5, 0], [0, 8], [10, 0], [6, 8], [12, 9], [-15, 15], [0, 24]])
+SLOPE_RATIOS = np.array([0.25, 0.5, 0.75, 0.75, 1, 1.5, 2])   # L / L_true needed to fit each wave (noise rms 10% of the peak)
+WAVEVECTORS = wavevector(MODES, LENGTH)               # k = 2 pi m / LENGTH
+WAVENUMBERS = np.linalg.norm(WAVEVECTORS, axis=1)     # |k|
+AMPLITUDES = SLOPE_RATIOS * L_TRUE / WAVENUMBERS
+PAIR = [2, 3]                      # the places of (10, 0) and (6, 8) in MODES: the same |k| in different directions
+
+# The networks, as in 1D and Optimal_solution
+INPUT_NORM = "l2"                  # in the l2 norm a round Gaussian, and waves in every direction, are treated equally
 HIDDEN_DIM, N_GROUPS, DEPTH = 64, 8, 5
+LEARNING_RATE = 3e-3
+SEEDS = [0, 1] if QUICK else [0, 1, 2]
+# The L scan, from below the smallest wave (0.25 L_true) to above the slope of all waves and the Gaussian together
+# (at most 1 + 6.75 = 7.75 L_true), where nothing limits the fit anymore. Steps of a quarter decade, so 1 is included.
+L_RATIOS = np.logspace(-1, 1.5, 3 if QUICK else 11)
+# Training until converged (see train_until_converged in Toy_utils): the learning rate is halved when the loss stops
+# improving, and training stops after n_halvings halvings. The same as in 1D
+CONVERGENCE = (dict(check_every=50, rel_tol=1e-3, patience=1, n_halvings=1, max_steps=300) if QUICK else
+               dict(check_every=500, rel_tol=1e-3, patience=2, n_halvings=6, max_steps=200000))
 
-# Figure format
-PANEL_SIZE = (3.1, 2.8)
-C_NET, C_REF, C_MUTED = "tab:orange", "#9a9893", "#6b6a66"
+# Where to train. The networks are tiny, so a GPU is not faster for one network because of the computing, but
+# because its time per step hardly grows with the number of points. Several networks share the GPU, one process each,
+# and every process needs its own CPU core: N_WORKERS at most the number of cores you have on the GPU machine.
+# (Not the Mac GPU, "mps": its sort, used by GroupSort, is slower than the CPU.)
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+N_WORKERS = 8 if DEVICE == "cuda" else None     # None: all CPU cores but one
+
+# The plots, in the same format as in 1D (Scripts/1D/Noise_response.py)
+PLOT_DIR = plot_dir("2D", "Sine_noise")
+L_RATIOS_SHOW = [0.3, 1, 3, 10]    # the networks shown in the fits (the nearest L in the scan)
+K_MAX_SHOWN = 25                   # highest |k| in the spectra (the shortest wave has |k| = 18.8)
+# The measures of the L scan: name -> (y label, file name, logarithmic y axis)
+MEASURES = {"MSE": ("MSE", "sine_noise_mse_vs_L.pdf", True),
+            "MAE": ("MAE", "sine_noise_mae_vs_L.pdf", True),
+            "FWHM": (r"$\mathrm{FWHM} / \mathrm{FWHM}_\mathrm{true}$", "sine_noise_fwhm_vs_L.pdf", True),
+            "removed": ("Noise removed (%)", "sine_noise_removed_vs_L.pdf", False)}
+# The MAE spans only about one decade. Matplotlib then labels the minor ticks as well, and the long labels push the
+# axis label out of the figure, so its labelled ticks are set by hand (only those inside the axis are shown)
+MAE_Y_TICKS = [0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05]
+# The scan plots sit side by side in the report, so they get a fixed size and margins and are saved without tight
+# cropping. The legend sits under the axes, in two columns
+SCAN_SIZE = (3.1, 3.5)
+SCAN_MARGINS = dict(left=0.26, right=0.96, top=0.970, bottom=0.330)
+SCAN_LEGEND = dict(loc="upper center", bbox_to_anchor=((0.5 - 0.26) / (0.96 - 0.26), -0.2), ncol=2,
+                   handlelength=1.4, columnspacing=0.8, handletextpad=0.4)
+PANEL_SIZE = (3.1, 2.8)            # inches, about the size of a 0.48\textwidth subfigure (two side by side)
+C_TRUE, C_MUTED, C_REF = "#1f1f1f", "#6b6a66", "#9a9893"
+C_NET, C_NOISE, C_DATA, C_MODE = "tab:orange", "tab:orange", "grey", "red"
+
+#======= FUNCTIONS =======
+def sine_noise(X, phases):
+    """The sine noise, the sum of A sin(k . x + phase) over all waves, at the points X of shape (..., 2)."""
+    noise = np.zeros(X.shape[:-1])
+    for A, k, phase in zip(AMPLITUDES, WAVEVECTORS, phases):
+        noise = noise + A * np.sin(X @ k + phase)     # X @ k is k . x at every point
+    return noise
 
 
-#### CALCULATIONS ####
 def make_data():
     """
-    The clean Gaussian, the plane-wave noise and the noisy Gaussian on a periodic grid (no double end point),
-    so that every wave sits exactly on one Fourier mode. Returns axes, X, clean, noise, noisy and the wave vectors.
+    The data as a dictionary:
+        X_train, clean_train, noise_train, noisy_train: N_TRAIN random points in the box and the values there,
+        axes, X_grid, clean_grid, noise_grid: the periodic evaluation grid and the values there.
+    The noise is a function of position, so the same waves (same phases) are evaluated at both sets of points.
     """
-    axes, X = make_grid((X_MAX - X_MIN) / 2, N_POINTS, DIM, endpoint=False)
-    clean = gaussian_nd(X, np.zeros(DIM), isotropic_cov(SIGMA, DIM))
-    wavevectors = [wavevector(modes, X_MAX - X_MIN) for modes in MODES]
-    noise = plane_wave_noise(X, AMPLITUDES, wavevectors)
-    return axes, X, clean, noise, clean + noise, wavevectors
+    rng = np.random.default_rng(SAMPLE_SEED)
+    X_train = rng.uniform(-HALF_WIDTH, HALF_WIDTH, size=(N_TRAIN, DIM))
+    axes, X_grid = make_grid(HALF_WIDTH, N_GRID, DIM, endpoint=False)
+
+    noise_rng = np.random.default_rng(NOISE_SEED)
+    phases = noise_rng.uniform(0, 2 * np.pi, len(AMPLITUDES))   # random, but the same in every run
+
+    data = {}
+    data["X_train"] = X_train
+    data["clean_train"] = gaussian_nd(X_train, MEAN, COV)
+    data["noise_train"] = sine_noise(X_train, phases)
+    data["noisy_train"] = data["clean_train"] + data["noise_train"]
+    data["axes"] = axes
+    data["X_grid"] = X_grid
+    data["clean_grid"] = gaussian_nd(X_grid, MEAN, COV)
+    data["noise_grid"] = sine_noise(X_grid, phases)
+    return data
 
 
-def dual_norm(v, norm):
-    """The dual of the input norm, along the last axis: the norm the gradient is bounded in."""
-    if norm == "l1":
-        return np.max(np.abs(v), axis=-1)
-    if norm == "l2":
-        return np.linalg.norm(v, axis=-1)
-    return np.sum(np.abs(v), axis=-1)       # linf
+def check_noise(data):
+    """Prints every wave (its size, the L it needs, and its amplitude measured from the grid) and the total noise level."""
+    print("L_true = %.4f, peak = %.4f" % (L_TRUE, PEAK))
+    print("mode        k sigma   A/peak   A|k|/L_true   measured A/A")
+    for m, k, k_length, A in zip(MODES, WAVEVECTORS, WAVENUMBERS, AMPLITUDES):
+        measured = mode_amplitude_nd(data["axes"], data["noise_grid"], k)   # should give back A
+        print("%-10s  %6.1f   %6.3f   %10.2f   %12.3f" % (m, k_length * SIGMA, A / PEAK, A * k_length / L_TRUE, measured / A))
 
+    rms_expected = np.sqrt(np.sum(AMPLITUDES ** 2) / 2)   # each wave has rms A / sqrt(2)
+    print("noise rms / peak: expected %.3f, training points %.3f" % (rms_expected / PEAK, np.std(data["noise_train"]) / PEAK))
 
-def wave_slope(A, k, norm):
-    """The slope the wave A sin(k . x) needs in the networks' norm: A ||k||_dual."""
-    return A * dual_norm(np.asarray(k), norm)
-
-
-def largest_slope(f, axes, norm):
-    """The largest slope of the grid function f in the networks' norm (central differences)."""
-    return np.max(dual_norm(grid_gradient(f, axes), norm))
-
-
-def train_networks(x, y, L_values, shape):
+#======= L-SCAN =======
+def L_scan(L_ratio, L_true, data, seeds):
     """
-    Lipschitz networks for every L and seed, and the unconstrained network for every seed.
-    Returns predictions[L] with shape (seeds, grid) and predictions_unconstrained with shape (seeds, grid).
+    Trains a Lipschitz network for every L = L_ratio * L_true and seed, and the unconstrained network for every seed,
+    on the noisy training points until converged, and evaluates them on the grid. Returns a dictionary with
+        grid: the Lipschitz networks on the grid, shape (seeds, L values, N_GRID, N_GRID),
+        histories[seed][L]: their training histories (step, loss, MSE to the clean Gaussian, learning rate),
+        unconstrained_grid, unconstrained_histories: the same for the unconstrained network (without the L axis).
     """
+    L_arr = L_ratio * L_true
     jobs = []
-    for L in L_values:
-        for seed in SEEDS:
-            jobs.append(dict(kind="lipschitz", seed=seed, steps=STEPS, lr=LEARNING_RATE, x=x, y=y,
-                             model_kwargs=dict(input_dim=DIM, hidden_dim=HIDDEN_DIM, output_dim=1, n_groups=N_GROUPS,
-                                               depth=DEPTH, lipschitz_bound=L, input_norm=INPUT_NORM)))
-    for seed in SEEDS:
-        jobs.append(dict(kind="unconstrained", seed=seed, steps=STEPS, lr=LEARNING_RATE, x=x, y=y,
-                         model_kwargs=dict(input_dim=DIM, hidden_dim=HIDDEN_DIM, output_dim=1, depth=DEPTH)))
-    print(f"Training {len(jobs)} networks on {len(x)} points")
-    results = iter(train_many(jobs))
+    for L in L_arr:
+        for seed in seeds:
+            job = {"kind": "lipschitz", "seed": seed,
+                   "model_kwargs": {"input_dim": DIM, "hidden_dim": HIDDEN_DIM, "output_dim": 1, "n_groups": N_GROUPS,
+                                    "depth": DEPTH, "lipschitz_bound": L, "input_norm": INPUT_NORM}}
+            jobs.append(job)
+    for seed in seeds:   # the unconstrained network: how much of the noise a network copies without a slope limit
+        job = {"kind": "unconstrained", "seed": seed,
+               "model_kwargs": {"input_dim": DIM, "hidden_dim": HIDDEN_DIM, "output_dim": 1, "depth": DEPTH}}
+        jobs.append(job)
 
-    predictions = {}
-    for L in L_values:
-        predictions[L] = np.array([next(results)["prediction"].reshape(shape) for _ in SEEDS])
-    predictions_unconstrained = np.array([next(results)["prediction"].reshape(shape) for _ in SEEDS])
-    return predictions, predictions_unconstrained
+    # The same data and training settings for every network
+    for job in jobs:
+        job["x"] = data["X_train"]
+        job["y"] = data["noisy_train"]
+        job["y_clean"] = data["clean_train"]               # to record the MSE to the clean Gaussian during training
+        job["x_eval"] = data["X_grid"].reshape(-1, DIM)    # the grid as a list of points, shape (N_GRID^2, 2)
+        job["lr"] = LEARNING_RATE
+        job["until_converged"] = True
+        job["convergence"] = CONVERGENCE
+        job["device"] = DEVICE
+
+    print("Training %d networks until converged on the %s" % (len(jobs), DEVICE))
+    start = time.time()
+    results = train_many(jobs, n_workers=N_WORKERS)     # in the same order as the jobs
+    print("Trained in %.1f min" % ((time.time() - start) / 60))
+
+    n_L = len(L_ratio)
+    n_seeds = len(seeds)
+    networks = {}
+    networks["grid"] = np.zeros((n_seeds, n_L, N_GRID, N_GRID))
+    networks["histories"] = [[None] * n_L for seed in seeds]
+    for j in range(n_L):
+        for i in range(n_seeds):
+            result = results[j * n_seeds + i]     # the jobs were made with the L loop outside and the seed loop inside
+            networks["grid"][i, j] = result["prediction"].reshape(N_GRID, N_GRID)
+            networks["histories"][i][j] = result["history"]
+
+    networks["unconstrained_grid"] = np.zeros((n_seeds, N_GRID, N_GRID))
+    networks["unconstrained_histories"] = [None] * n_seeds
+    for i in range(n_seeds):
+        result = results[n_L * n_seeds + i]       # after all the Lipschitz networks
+        networks["unconstrained_grid"][i] = result["prediction"].reshape(N_GRID, N_GRID)
+        networks["unconstrained_histories"][i] = result["history"]
+    return networks
 
 
-def surviving_fractions(axes, predictions, A, k):
-    """The amplitude of the wave in every prediction divided by its amplitude in the data, one value per seed."""
-    return np.array([mode_amplitude_nd(axes, prediction, k) / A for prediction in predictions])
-
-
-def print_summary(axes, clean, noise, predictions, predictions_unconstrained, wavevectors):
-    """The surviving fraction of every wave, and the MSE to the clean Gaussian and the noise removed, per network."""
-    print("Fraction of each wave that survives (mean ± std over seeds)")
-    for L, runs in [*predictions.items(), ("Unconstrained", predictions_unconstrained)]:
-        print(f"{'L = ' + format(L, 'g') if L != 'Unconstrained' else L}:")
-        for A, k in zip(AMPLITUDES, wavevectors):
-            fractions = surviving_fractions(axes, runs, A, k)
-            needed = f", needs {wave_slope(A, k, INPUT_NORM) / L:6.2f} L" if L != "Unconstrained" else ""
-            print(f"   k = ({k[0]:5.2f}, {k[1]:5.2f}){needed}: {fractions.mean():.2f} ± {fractions.std():.2f}")
-
-    print(f"\nMSE to the clean Gaussian (noisy data itself: {np.mean(noise ** 2):.2e}) and noise removed")
-    for L, runs in [*predictions.items(), ("Unconstrained", predictions_unconstrained)]:
-        name = f"L = {L:g}" if L != "Unconstrained" else L
-        mse = [np.mean((p - clean) ** 2) for p in runs]
-        removed = [100 * noise_removed(p, clean, noise) for p in runs]
-        print(f"   {name:14s}: MSE {np.mean(mse):.2e} ± {np.std(mse):.1e}, "
-              f"noise removed {np.mean(removed):5.1f} ± {np.std(removed):.1f} %")
-
-
-#### PLOTS ####
-def plot_noise_inputs(axes, clean, noise, noisy, wavevectors, file_name, k_max=40):
+def same_array(a, b):
     """
-    Rows: the Gaussian, the noise and the noisy Gaussian. Columns: the function, its 2D Fourier spectrum (one dot per
-    mode, darker and larger = stronger, log scale) and the radial spectrum (amplitude against |k|).
-    The wave vectors are marked in red.
+    True if a and b have the same shape and the same values up to rounding. Not exact equality: the networks may be
+    trained on another computer (the cluster), which can round the last digit of sin and exp differently.
     """
-    rows = [(clean, "Gaussian", "black"), (noise, "Noise", "orange"), (noisy, "Gaussian + noise", "grey")]
-    extent = [axes[0][0], axes[0][-1], axes[1][0], axes[1][-1]]
+    return a.shape == b.shape and np.allclose(a, b)
+
+
+def saved_or_trained_networks(data):
+    """
+    The networks of the L scan. Loaded from NETWORKS_FILE if they were trained on the same data, L values and
+    convergence settings as now, otherwise trained again and saved together with those.
+    """
+    if LOAD_SAVED and os.path.exists(NETWORKS_FILE):
+        saved = load_results(NETWORKS_FILE)
+        same_data = same_array(saved["X_train"], data["X_train"]) and same_array(saved["noisy_train"], data["noisy_train"])
+        same_L = same_array(saved["L_ratios"], L_RATIOS) and saved["seeds"] == SEEDS
+        same_training = saved["convergence"] == CONVERGENCE
+        if same_data and same_L and same_training:
+            return saved["networks"]
+        print("The saved networks used other data, L values or settings: training again")
+
+    networks = L_scan(L_RATIOS, L_TRUE, data, SEEDS)
+    save_results({"X_train": data["X_train"], "noisy_train": data["noisy_train"], "L_ratios": L_RATIOS,
+                  "seeds": SEEDS, "convergence": CONVERGENCE, "networks": networks}, NETWORKS_FILE)
+    return networks
+
+#======= MEASURES =======
+def measures(prediction, data):
+    """
+    The measures of one fit on the grid: MSE and MAE to the clean Gaussian, the width at half maximum relative to
+    the true width (fwhm_equivalent: the diameter of the circle with the same area as the region above half maximum),
+    and the share of the noise removed in % (see noise_removed in Toy_utils: kept = copied^2, removed = 1 - kept).
+    The sine noise exists everywhere, so the noise removed is measured on the grid, not only at the training points.
+    """
+    error = prediction - data["clean_grid"]
+    fwhm_true = fwhm_equivalent(data["clean_grid"], data["axes"])
+    return {"MSE": np.mean(error ** 2),
+            "MAE": np.mean(np.abs(error)),
+            "FWHM": fwhm_equivalent(prediction, data["axes"]) / fwhm_true,
+            "removed": 100 * noise_removed(prediction, data["clean_grid"], data["noise_grid"])}
+
+
+def network_measures(data, networks):
+    """The measures of every network: lipschitz[name] of shape (seeds, L values) and unconstrained[name] of shape (seeds,)."""
+    n_seeds, n_L = networks["grid"].shape[:2]
+    lipschitz = {}
+    unconstrained = {}
+    for name in MEASURES:
+        lipschitz[name] = np.zeros((n_seeds, n_L))
+        unconstrained[name] = np.zeros(n_seeds)
+    for i in range(n_seeds):
+        for j in range(n_L):
+            for name, value in measures(networks["grid"][i, j], data).items():
+                lipschitz[name][i, j] = value
+        for name, value in measures(networks["unconstrained_grid"][i], data).items():
+            unconstrained[name][i] = value
+    return lipschitz, unconstrained
+
+
+def surviving_fractions(axes, prediction):
+    """
+    The fraction of every sine wave that survives in a fit on the grid: the amplitude of its Fourier mode in the fit
+    divided by its amplitude in the data. The grid spans the box exactly, so every wave sits on one Fourier mode.
+    """
+    fractions = np.zeros(len(AMPLITUDES))
+    for i in range(len(AMPLITUDES)):
+        fractions[i] = mode_amplitude_nd(axes, prediction, WAVEVECTORS[i]) / AMPLITUDES[i]
+    return fractions
+
+
+def network_fractions(data, networks):
+    """The surviving fraction of every wave in the networks, mean over seeds, shape (L values, waves)."""
+    n_seeds, n_L = networks["grid"].shape[:2]
+    fractions = np.zeros((n_L, len(AMPLITUDES)))
+    for j in range(n_L):
+        for i in range(n_seeds):
+            fractions[j] = fractions[j] + surviving_fractions(data["axes"], networks["grid"][i, j]) / n_seeds
+    return fractions
+
+#======= PLOTS =======
+def format_spectrum_axes(ax):
+    """The shared format of the spectra, as in 1D: logarithmic amplitude, and the |k| of every wave marked."""
+    ax.set_yscale("log")
+    ax.set_ylim(1e-7, 1e-1)
+    ax.set_yticks([1e-6, 1e-4, 1e-2])          # no tick labels at the edges, so they do not run into the next row
+    ax.set_xlim(0, K_MAX_SHOWN)
+    ax.set_ylabel("Amplitude")
+    for k_wave in WAVENUMBERS:
+        ax.axvline(k_wave, color=C_MODE, ls=":", lw=0.8)
+
+
+def plot_data(data, file_name):
+    """
+    The data, as in 1D: the clean Gaussian, the noise and the noisy Gaussian as maps on the grid (left), and their
+    radial Fourier spectra (right) with the |k| of the waves marked. The radial spectrum adds up the modes with the
+    same |k|, so the peak of (10, 0) and (6, 8) together is sqrt(2) A.
+    """
+    noisy = data["clean_grid"] + data["noise_grid"]
+    extent = [-HALF_WIDTH, HALF_WIDTH, -HALF_WIDTH, HALF_WIDTH]
+    noise_limit = np.abs(data["noise_grid"]).max()                     # a colour scale symmetric around zero
+    k, clean_spectrum = radial_spectrum(data["axes"], data["clean_grid"])
+    noise_spectrum = radial_spectrum(data["axes"], data["noise_grid"])[1]
+    noisy_spectrum = radial_spectrum(data["axes"], noisy)[1]
+    with plt.rc_context(REPORT_STYLE):
+        # wspace: room between the colour bars of the maps and the axis labels of the spectra
+        fig, axs = plt.subplots(3, 2, figsize=(6.3, 7.5), sharex="col", gridspec_kw=dict(hspace=0.15, wspace=0.95))
+        images = [axs[0, 0].imshow(data["clean_grid"].T, origin="lower", extent=extent, cmap="viridis"),   # .T: imshow wants (x_2, x_1)
+                  axs[1, 0].imshow(data["noise_grid"].T, origin="lower", extent=extent, cmap="RdBu_r",
+                                   vmin=-noise_limit, vmax=noise_limit),
+                  axs[2, 0].imshow(noisy.T, origin="lower", extent=extent, cmap="viridis")]
+        for image, ax, label in zip(images, axs[:, 0], [r"$f$", r"$n$", r"$f + n$"]):
+            fig.colorbar(image, ax=ax, label=label)
+            ax.set_xticks([-4, 0, 4])
+            ax.set_yticks([-4, 0, 4])
+            ax.set_ylabel(r"$x_2$")
+        axs[2, 0].set_xlabel(r"$x_1$")
+
+        axs[0, 1].plot(k, clean_spectrum, color=C_TRUE, lw=1.2)
+        axs[1, 1].plot(k, noise_spectrum, color=C_NOISE, lw=1.0)
+        axs[2, 1].plot(k, noisy_spectrum, color=C_DATA, lw=1.0)
+        axs[2, 1].plot(k, clean_spectrum, color=C_TRUE, lw=1.2, ls="--")
+        for ax in axs[:, 1]:
+            format_spectrum_axes(ax)
+        axs[2, 1].set_xlabel(r"$|k|$")
+        fig.savefig(f"{PLOT_DIR}/{file_name}")
+        plt.close(fig)
+
+
+def plot_fits_and_spectra(data, L_ratios, networks, file_name):
+    """
+    One row per network (the L in L_RATIOS_SHOW, then the unconstrained network), as in 1D. Left: cuts through the
+    peak along x_1 (at x_2 = 0) of the noisy Gaussian, the clean Gaussian (dashed) and the fits, one line per seed.
+    Right: the radial Fourier spectra of the same, on the whole grid. A wave the network removes shows up as a peak of
+    the noisy data that is missing in the spectrum of the fit.
+    """
+    x = data["axes"][0]
+    noisy = data["clean_grid"] + data["noise_grid"]
+    noisy_cut = central_line(noisy)                  # central_line: the values along x_1 at x_2 = 0
+    clean_cut = central_line(data["clean_grid"])
+    k, clean_spectrum = radial_spectrum(data["axes"], data["clean_grid"])
+    noisy_spectrum = radial_spectrum(data["axes"], noisy)[1]
+    rows = []
+    shown = []                                           # the places in the scan already shown, so no L appears twice
+    for ratio in L_RATIOS_SHOW:
+        j = np.argmin(np.abs(np.log(L_ratios / ratio)))  # the nearest L in the scan, on the log scale of the scan
+        if j in shown:
+            continue
+        shown.append(j)
+        rows.append((rf"${L_ratios[j]:.2g}\,L_\mathrm{{true}}$", networks["grid"][:, j]))
+    rows.append(("Unconstr.", networks["unconstrained_grid"]))
 
     with plt.rc_context(REPORT_STYLE):
-        fig, axs = plt.subplots(3, 3, figsize=(6.3, 1.9 * 3), gridspec_kw=dict(hspace=0.35, wspace=0.7))
-        for i, (f, name, color) in enumerate(rows):
-            axs[i, 0].imshow(f.T, origin="lower", extent=extent, cmap="viridis")
-            axs[i, 0].set_ylabel(f"{name}\n" + r"$x_2$")
+        fig, axs = plt.subplots(len(rows), 2, figsize=(6.3, 1.7 * len(rows)), sharex="col",
+                                gridspec_kw=dict(hspace=0.12, wspace=0.45))
+        for (name, predictions), ax_fit, ax_spectrum in zip(rows, axs[:, 0], axs[:, 1]):
+            ax_fit.plot(x, noisy_cut, color="lightgrey", lw=0.8)
+            ax_fit.plot(x, clean_cut, color=C_TRUE, lw=1.0, ls="--")
+            for prediction in predictions:
+                ax_fit.plot(x, central_line(prediction), color=C_NET, alpha=0.7, lw=1.0)
+            ax_fit.set_ylabel(name)
 
-            K, coefficients = fourier_modes(axes, f)
-            shown = np.all(np.abs(K) <= k_max, axis=-1)
-            log_amplitude = np.log10(np.maximum(2 * coefficients[shown], 1e-8))
-            order = np.argsort(log_amplitude)                    # the strongest modes last, on top
-            dot_size = 2 + 40 * np.clip((log_amplitude[order] + 6) / 6, 0, 1) ** 3
-            axs[i, 1].scatter(K[shown][order, 0], K[shown][order, 1], c=log_amplitude[order], s=dot_size,
-                              vmin=-6, vmax=0, cmap="Greys", linewidths=0)
-            axs[i, 1].set_xlim(-k_max, k_max)
-            axs[i, 1].set_ylim(-k_max, k_max)
-            axs[i, 1].set_aspect("equal")
-            axs[i, 1].set_ylabel(r"$k_2$")
+            ax_spectrum.plot(k, noisy_spectrum, color="lightgrey", lw=0.8)
+            ax_spectrum.plot(k, clean_spectrum, color=C_TRUE, lw=1.0, ls="--")
+            for prediction in predictions:
+                ax_spectrum.plot(k, radial_spectrum(data["axes"], prediction)[1], color=C_NET, alpha=0.7, lw=0.8)
+            format_spectrum_axes(ax_spectrum)
 
-            axs[i, 2].plot(*radial_spectrum(axes, f), color=color, lw=0.8)
-            axs[i, 2].set_xlim(0, k_max)
-            axs[i, 2].set_yscale("log")
-            axs[i, 2].set_ylim(1e-6, 1)
-            axs[i, 2].set_ylabel("Amplitude")
-
-            for k in wavevectors:                                # at +k and -k in the 2D spectrum
-                axs[i, 1].plot([k[0], -k[0]], [k[1], -k[1]], "o", mfc="none", color="red", ms=9, mew=0.8)
-                axs[i, 2].axvline(np.linalg.norm(k), color="red", ls=":", lw=0.8)
-
-        axs[-1, 0].set_xlabel(r"$x_1$")
-        axs[-1, 1].set_xlabel(r"$k_1$")
-        axs[-1, 2].set_xlabel(r"$|k|$")
+        axs[-1, 0].set_xlabel(r"$x_1$ ($x_2 = 0$)")
+        axs[-1, 1].set_xlabel(r"$|k|$")
         fig.align_ylabels(axs[:, 0])
-        fig.savefig(f"{PLOT_DIR}/{file_name}")
-        plt.close(fig)
-
-
-def plot_noise_fits(axes, clean, noisy, predictions, predictions_unconstrained, wavevectors, file_name, k_max=20):
-    """One row per network. Columns: the fit (seed 0), a cut along x_1 through the centre, and the radial spectrum."""
-    rows = [(f"$L = {L:g}$", runs) for L, runs in predictions.items()] + [("Unconstr.", predictions_unconstrained)]
-    extent = [axes[0][0], axes[0][-1], axes[1][0], axes[1][-1]]
-    k_noisy, amplitude_noisy = radial_spectrum(axes, noisy)
-    k_clean, amplitude_clean = radial_spectrum(axes, clean)
-
-    with plt.rc_context(REPORT_STYLE):
-        fig, axs = plt.subplots(len(rows), 3, figsize=(6.3, 1.6 * len(rows)), sharex="col",
-                                gridspec_kw=dict(hspace=0.15, wspace=0.45))
-        for i, (name, runs) in enumerate(rows):
-            axs[i, 0].imshow(runs[0].T, origin="lower", extent=extent, cmap="viridis",
-                             vmin=clean.min(), vmax=clean.max())    # the same colour scale as the clean Gaussian
-            axs[i, 0].set_ylabel(name)
-
-            axs[i, 1].plot(axes[0], central_line(noisy), color="lightgrey", lw=0.8)
-            axs[i, 1].plot(axes[0], central_line(clean), color="black", lw=1.0, ls="--")
-            for prediction in runs:
-                axs[i, 1].plot(axes[0], central_line(prediction), color=C_NET, alpha=0.7, lw=1.0)
-
-            axs[i, 2].plot(k_noisy, amplitude_noisy, color="lightgrey", lw=0.8)
-            axs[i, 2].plot(k_clean, amplitude_clean, color="black", lw=1.0, ls="--")
-            for prediction in runs:
-                axs[i, 2].plot(*radial_spectrum(axes, prediction), color=C_NET, alpha=0.7, lw=1.0)
-            for k in wavevectors:
-                axs[i, 2].axvline(np.linalg.norm(k), color="red", ls=":", lw=0.8)
-            axs[i, 2].set_yscale("log")
-            axs[i, 2].set_ylim(1e-6, 1)
-            axs[i, 2].set_xlim(0, k_max)
-
-        axs[-1, 0].set_xlabel(r"$x_1$")
-        axs[-1, 1].set_xlabel(r"$x_1$ ($x_2 = 0$)")
-        axs[-1, 2].set_xlabel(r"$|k|$")
-        handles = [plt.Line2D([], [], color="lightgrey", lw=0.8, label="Training data (noisy)"),
-                   plt.Line2D([], [], color="black", lw=1.0, ls="--", label="Clean Gaussian"),
+        fig.align_ylabels(axs[:, 1])
+        handles = [plt.Line2D([], [], color="lightgrey", lw=0.8, label="Noisy Gaussian"),
+                   plt.Line2D([], [], color=C_TRUE, lw=1.0, ls="--", label="Clean Gaussian"),
                    plt.Line2D([], [], color=C_NET, lw=1.0, label="Network (one line per seed)"),
-                   plt.Line2D([], [], color="red", ls=":", lw=0.8, label="Noise wave vectors")]
-        fig.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, 0.9), ncol=2)
+                   plt.Line2D([], [], color=C_MODE, ls=":", lw=0.8, label="Sine modes")]
+        fig.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, 0.9), ncol=2, frameon=False)
         fig.savefig(f"{PLOT_DIR}/{file_name}")
         plt.close(fig)
 
 
-def plot_surviving_fractions(axes, predictions, wavevectors, file_name):
+def plot_scan(name, L_ratios, lipschitz, unconstrained, noisy):
     """
-    The fraction of every wave that survives, against the slope it needs relative to L. Left in the l2 norm
-    (A ||k||_2 / L), right in the l1-network norm (A ||k||_inf / L). The waves fall on one curve in the panel of the
-    networks' own norm, and the diagonal waves are shifted in the other.
+    One measure against L / L_true, as in 1D: the networks (mean over seeds, the spread min to max as error bars), the
+    unconstrained network (dashed, its spread as a band) and the noisy data itself (dotted, if noisy[name] is not None).
+    L_true is marked, and the slope every wave needs (SLOPE_RATIOS).
     """
-    markers = ["o", "s", "D", "^", "v"]
-    L_values = np.array(list(predictions.keys()))
-    with plt.rc_context(REPORT_STYLE):
-        fig, axs = plt.subplots(1, 2, figsize=(6.3, 2.8), sharey=True, gridspec_kw=dict(wspace=0.1))
-        for A, k, modes, marker in zip(AMPLITUDES, wavevectors, MODES, markers):
-            fractions = [surviving_fractions(axes, predictions[L], A, k) for L in L_values]
-            mean = [f.mean() for f in fractions]
-            std = [f.std() for f in fractions]
-            for ax, norm in [(axs[0], "l2"), (axs[1], "l1")]:
-                ax.errorbar(wave_slope(A, k, norm) / L_values, mean, yerr=std, fmt=marker, capsize=3, ms=4,
-                            label=f"modes {modes}")
-        for ax, label in [(axs[0], r"$A\|k\|_2 / L$"), (axs[1], r"$A\|k\|_\infty / L$")]:
-            ax.axvline(1, color=C_MUTED, ls="--", lw=0.8)
-            ax.set_xscale("log")
-            ax.set_xlabel(label)
-        axs[0].set_ylabel("Fraction that survives")
-        handles, labels = axs[0].get_legend_handles_labels()
-        fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=3)   # below the x labels
-        fig.savefig(f"{PLOT_DIR}/{file_name}")
-        plt.close(fig)
-
-
-def plot_measure_vs_L(L_ratios, values, values_unconstrained, y_label, file_name, wave_ratios, noisy_level=None,
-                      log_y=False):
-    """
-    One measure (seeds as rows, values: (L, seeds)) against L / L_max, with the unconstrained network as a band.
-    Dotted red lines: where each wave starts to be clipped, A ||k||_dual / L_max.
-    """
-    with plt.rc_context(REPORT_STYLE):
-        fig, ax = plt.subplots(figsize=PANEL_SIZE)
-        lipschitz_line = ax.errorbar(L_ratios, values.mean(axis=1), yerr=values.std(axis=1), fmt="o-", color=C_NET,
-                                     lw=1.2, markersize=4, capsize=3, label="Lipschitz")
-        mean, std = values_unconstrained.mean(), values_unconstrained.std()
-        unconstrained_line = ax.axhline(mean, color=C_REF, lw=1.2, ls="--", label="Unconstrained")
-        ax.axhspan(mean - std, mean + std, color=C_REF, alpha=0.3, lw=0)
-        handles = [lipschitz_line, unconstrained_line]
-        if noisy_level is not None:
-            handles.append(ax.axhline(noisy_level, color="black", lw=0.8, ls=":", label="Noisy data"))
-        for ratio in wave_ratios:
-            ax.axvline(ratio, color="red", ls=":", lw=0.8)
+    y_label, file_name, log_y = MEASURES[name]
+    values = lipschitz[name]
+    reference = unconstrained[name]
+    mean = values.mean(axis=0)
+    spread = [mean - values.min(axis=0), values.max(axis=0) - mean]
+    with plt.rc_context(REPORT_STYLE), plt.rc_context({"savefig.bbox": "standard"}):
+        fig, ax = plt.subplots(figsize=SCAN_SIZE)
+        fig.subplots_adjust(**SCAN_MARGINS)
+        handles = [ax.errorbar(L_ratios, mean, yerr=spread, fmt="o", color=C_NET, markersize=3.5, lw=1.0, capsize=2,
+                               label="Networks"),
+                   ax.axhline(reference.mean(), color=C_REF, lw=1.2, ls="--", label="Unconstrained")]
+        ax.axhspan(reference.min(), reference.max(), color=C_REF, alpha=0.3, lw=0)
+        if noisy[name] is not None:
+            handles.append(ax.axhline(noisy[name], color=C_TRUE, lw=0.8, ls=":", label="Noisy data"))
+        ax.axvline(1.0, color=C_MUTED, lw=0.8, ls="--")             # L_true
+        for ratio in SLOPE_RATIOS:                                  # the slope every wave needs, in units of L_true
+            mode_line = ax.axvline(ratio, color=C_MODE, ls=":", lw=0.8, label="Sine modes")
+        handles.append(mode_line)
         ax.set_xscale("log")
         if log_y:
             ax.set_yscale("log")
-        ax.set_xlabel(r"$L / L_\mathrm{max}$")
+        if name == "MAE":
+            ax.yaxis.set_major_locator(plt.FixedLocator(MAE_Y_TICKS))
+            ax.yaxis.set_major_formatter(plt.FormatStrFormatter("%g"))   # 0.005 instead of 5x10^-3
+            ax.yaxis.set_minor_formatter(plt.NullFormatter())            # minor ticks stay, without labels
+        if name == "FWHM":
+            ax.axhline(1.0, color=C_MUTED, lw=0.8, ls="--")             # the true width
+            ax.yaxis.set_major_formatter(plt.FormatStrFormatter("%g"))   # 1, 2, 3 instead of 10^0, 2x10^0
+            ax.yaxis.set_minor_formatter(plt.FormatStrFormatter("%g"))
+        ax.set_xlabel(r"$L / L_\mathrm{true}$")
         ax.set_ylabel(y_label)
-        ax.legend(handles=handles)
+        ax.legend(handles=handles, **SCAN_LEGEND)
         fig.savefig(f"{PLOT_DIR}/{file_name}")
         plt.close(fig)
 
 
+def plot_surviving_fractions(L_ratios, fractions, file_name):
+    """
+    The fraction of every sine wave that survives in the networks (mean over seeds), against the slope it needs
+    relative to L, A|k| / L = SLOPE_RATIOS / (L / L_true). If the bound is what removes the waves, all waves follow
+    one curve, and a wave passes when A|k| < L. As in 1D.
+    """
+    with plt.rc_context(REPORT_STYLE):
+        fig, ax = plt.subplots(figsize=PANEL_SIZE)
+        for j, ratio in enumerate(L_ratios):
+            ax.plot(SLOPE_RATIOS / ratio, fractions[j], "o", color=C_NET, markersize=3.5)
+        ax.axvline(1.0, color=C_MUTED, lw=0.8, ls="--")
+        ax.set_xscale("log")
+        ax.set_xlabel(r"$A|k| / L$")
+        ax.set_ylabel("Fraction that survives")
+        fig.savefig(f"{PLOT_DIR}/{file_name}")
+        plt.close(fig)
+
+#======= MAIN =======
 def main():
-    # 1. The data
-    axes, X, clean, noise, noisy, wavevectors = make_data()
-    x = X.reshape(-1, DIM)
-    L_true = largest_slope(clean, axes, INPUT_NORM)
-    L_max = max(L_true, largest_slope(noisy, axes, INPUT_NORM))
-    print(f"Grid {N_POINTS}^{DIM}, norm {INPUT_NORM}: slope of the Gaussian {L_true:.4f}, of the noisy data {L_max:.2f}")
-    for A, k in zip(AMPLITUDES, wavevectors):
-        print(f"Wave k = ({k[0]:5.2f}, {k[1]:5.2f}), A = {A}: needs slope {wave_slope(A, k, INPUT_NORM):.3f}")
-    plot_noise_inputs(axes, clean, noise, noisy, wavevectors, "sine_noise_input_and_spectra.pdf")
+    data = make_data()
+    check_noise(data)
+    plot_data(data, "sine_noise_data.pdf")
+    networks = saved_or_trained_networks(data)
 
-    # Training: the networks for a few L and the L scan (saved, so the plots can be remade without training)
-    L_scan = L_RATIOS_SCAN * L_max
-    if LOAD_SAVED and os.path.exists(RESULTS_FILE):
-        with open(RESULTS_FILE, "rb") as file:
-            saved = pickle.load(file)
-        print(f"Loaded the networks from {RESULTS_FILE}")
-    else:
-        predictions, predictions_unconstrained = train_networks(x, noisy.ravel(), L_VALUES, clean.shape)
-        predictions_scan, predictions_scan_unconstrained = train_networks(x, noisy.ravel(), L_scan, clean.shape)
-        saved = dict(predictions=predictions, predictions_unconstrained=predictions_unconstrained,
-                     predictions_scan=predictions_scan, predictions_scan_unconstrained=predictions_scan_unconstrained,
-                     L_scan=L_scan, L_max=L_max)
-        with open(RESULTS_FILE, "wb") as file:
-            pickle.dump(saved, file)
+    lipschitz, unconstrained = network_measures(data, networks)
+    noisy = measures(data["clean_grid"] + data["noise_grid"], data)    # the noisy data itself, as a reference
+    noisy["removed"] = None            # the noisy data keeps all of its noise (0 % removed): no line, as in 1D
+    plot_fits_and_spectra(data, L_RATIOS, networks, "sine_noise_fits_and_spectra.pdf")
+    for name in MEASURES:
+        plot_scan(name, L_RATIOS, lipschitz, unconstrained, noisy)
 
-    # 2. Networks for a few L
-    print_summary(axes, clean, noise, saved["predictions"], saved["predictions_unconstrained"], wavevectors)
-    plot_noise_fits(axes, clean, noisy, saved["predictions"], saved["predictions_unconstrained"], wavevectors,
-                    "sine_noise_fits_and_spectra.pdf")
-    plot_surviving_fractions(axes, saved["predictions"], wavevectors, "sine_noise_surviving_fraction.pdf")
-
-    # 3. L scan: MSE to the clean Gaussian and the noise removed
-    wave_ratios = [wave_slope(A, k, INPUT_NORM) / saved["L_max"] for A, k in zip(AMPLITUDES, wavevectors)]
-    measures = [(lambda p: np.mean((p - clean) ** 2), "MSE to clean Gaussian", "sine_noise_mse_vs_L.pdf", True),
-                (lambda p: 100 * noise_removed(p, clean, noise), "Noise removed (%)", "sine_noise_removed_vs_L.pdf", False)]
-    for measure, y_label, file_name, log_y in measures:
-        values = np.array([[measure(p) for p in saved["predictions_scan"][L]] for L in saved["L_scan"]])
-        values_unconstrained = np.array([measure(p) for p in saved["predictions_scan_unconstrained"]])
-        plot_measure_vs_L(saved["L_scan"] / saved["L_max"], values, values_unconstrained, y_label, file_name,
-                          wave_ratios, noisy_level=np.mean(noise ** 2) if log_y else None, log_y=log_y)
-    return 0
-
+    fractions = network_fractions(data, networks)
+    plot_surviving_fractions(L_RATIOS, fractions, "sine_noise_surviving_fraction.pdf")
+    # The isotropy check: in the l2 norm, two waves with the same |k| should survive equally, whatever their direction
+    print("Surviving fraction of (10, 0) and (6, 8), the same |k| in different directions:")
+    for j, ratio in enumerate(L_RATIOS):
+        print("  L = %5.2f L_true:   %.3f   %.3f" % (ratio, fractions[j, PAIR[0]], fractions[j, PAIR[1]]))
+    return
 
 if __name__ == "__main__":
     main()
