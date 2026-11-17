@@ -176,12 +176,15 @@ def fwhm_along(axes, f, direction, center=None, n_points=4001):
 
 
 ##### NETWORKS #####
-def evaluate_with_gradient(model, x):
-    """Output of the model at the points x, shape (N, n), and its gradient, as numpy arrays of shape (N,) and (N, n)."""
-    x_tensor = torch.tensor(np.asarray(x), dtype=torch.float32).requires_grad_(True)
+def evaluate_with_gradient(model, x, device="cpu"):
+    """
+    Output of the model at the points x, shape (N, n), and its gradient, as numpy arrays of shape (N,) and (N, n).
+    device: where the model is ("cpu" or "cuda"), the results are always returned on the CPU.
+    """
+    x_tensor = torch.tensor(np.asarray(x), dtype=torch.float32, device=device).requires_grad_(True)
     out = model(x_tensor)
     gradient, = torch.autograd.grad(out.sum(), x_tensor)
-    return out.detach().numpy().ravel(), gradient.numpy()
+    return out.detach().cpu().numpy().ravel(), gradient.cpu().numpy()
 
 
 def train_one(job):
@@ -195,23 +198,25 @@ def train_one(job):
         until_converged (optional): True trains with train_until_converged instead of for a fixed number of steps
             (steps is then not used), with the settings in convergence (a dictionary, optional) and the targets without
             noise in y_clean (optional, shape (N,)).
+        device (optional): "cpu" (default) or "cuda". The network and the data are moved there for training.
     Returns a dictionary with the prediction, shape (N_eval,), and the gradient, shape (N_eval, n), at x_eval, and the
     training history (only with until_converged, otherwise None).
     """
+    device = job.get("device", "cpu")
     torch.manual_seed(job["seed"])
     model_cls = LipschitzModel if job["kind"] == "lipschitz" else UnconstrainedModel
-    model = model_cls(**job["model_kwargs"])
-    x = torch.tensor(job["x"], dtype=torch.float32)
-    y = torch.tensor(job["y"], dtype=torch.float32).reshape(-1, 1)
+    model = model_cls(**job["model_kwargs"]).to(device)   # made on the CPU first: the same start weights on every device
+    x = torch.tensor(job["x"], dtype=torch.float32, device=device)
+    y = torch.tensor(job["y"], dtype=torch.float32, device=device).reshape(-1, 1)
     history = None
     if job.get("until_converged", False):
         y_clean = job.get("y_clean")
         if y_clean is not None:
-            y_clean = torch.tensor(y_clean, dtype=torch.float32).reshape(-1, 1)
+            y_clean = torch.tensor(y_clean, dtype=torch.float32, device=device).reshape(-1, 1)
         history = train_until_converged(model, x, y, lr=job["lr"], y_clean=y_clean, **job.get("convergence", {}))
     else:
         train_full_batch(model, x, y, steps=job["steps"], lr=job["lr"])
-    prediction, gradient = evaluate_with_gradient(model, job.get("x_eval", job["x"]))
+    prediction, gradient = evaluate_with_gradient(model, job.get("x_eval", job["x"]), device)
     return {"prediction": prediction, "gradient": gradient, "history": history}
 
 
@@ -224,9 +229,17 @@ def train_many(jobs, n_workers=None):
     """
     Runs train_one for every job in parallel, one process per network, and returns the results in the same order.
     The jobs are independent, so a scan over L values and seeds trains about as fast as a single network.
+    On a GPU the processes share it. Every process still needs its own CPU core to send the work to the GPU, so
+    n_workers should be at most the number of cores you have there.
     """
     if n_workers is None:
-        n_workers = min(len(jobs), max(1, (os.cpu_count() or 2) - 1))
+        # The cores this process may use. On a cluster that is only the cores the job asked for, while os.cpu_count()
+        # gives all cores of the machine. macOS has no sched_getaffinity, but there all cores can be used anyway.
+        if hasattr(os, "sched_getaffinity"):
+            n_cores = len(os.sched_getaffinity(0))
+        else:
+            n_cores = os.cpu_count() or 2
+        n_workers = min(len(jobs), max(1, n_cores - 1))
     with mp.get_context("spawn").Pool(n_workers) as pool:
         # chunksize=1: a free worker takes the next single job, so jobs of very different length (e.g. trained until
         # converged) are spread evenly over the workers

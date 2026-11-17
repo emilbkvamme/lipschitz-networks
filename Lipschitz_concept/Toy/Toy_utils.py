@@ -1,6 +1,7 @@
 # Utility functions for the toy example notebook
 import os
 import pickle
+import time
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
@@ -154,28 +155,33 @@ def train_until_converged(model, x, y, lr=3e-3, check_every=500, rel_tol=1e-3, p
     more than rel_tol (relative) for `patience` checks in a row, the learning rate is halved. Training stops when the
     loss no longer improves after n_halvings halvings (converged), or at max_steps (not converged).
     y_clean (optional): the targets without noise, the MSE to them is recorded as well.
+    Works on the CPU and the GPU: the model and x, y, y_clean must be on the same device.
     Returns the history: lists with the step, the training loss, the MSE to y_clean and the learning rate at every
-    check, and whether the training converged before max_steps.
+    check, whether the training converged before max_steps, and the training time in seconds.
     """
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    history = {"step": [], "loss": [], "mse_clean": [], "lr": [], "converged": False}
+    history = {"step": [], "loss": [], "mse_clean": [], "lr": [], "converged": False, "seconds": 0.0}
+    start = time.time()
     best = np.inf
     checks_without_improvement = 0
     halvings = 0
-    losses = []
+    # The sum of the losses since the last check. It stays on the device and is only read out (.item()) at the checks:
+    # reading it every step would make the CPU wait for the GPU to finish every step before it can start the next one
+    loss_sum = 0.0
     for step in range(1, max_steps + 1):
         optimizer.zero_grad()
         loss = ((model(x) - y) ** 2).mean()
         loss.backward()
         optimizer.step()
-        losses.append(loss.item())
+        loss_sum = loss_sum + loss.detach()
 
         if step % check_every == 0:
-            mean_loss = np.mean(losses)
-            losses = []
+            mean_loss = loss_sum.item() / check_every
+            loss_sum = 0.0
             history["step"].append(step)
             history["loss"].append(mean_loss)
             history["lr"].append(lr)
+            history["seconds"] = time.time() - start
             if y_clean is not None:
                 with torch.no_grad():
                     history["mse_clean"].append(((model(x) - y_clean) ** 2).mean().item())
@@ -236,6 +242,10 @@ REPORT_STYLE = {
     "xtick.color": "black", "ytick.color": "black",
     "axes.grid": False, "axes.axisbelow": True,
     "legend.frameon": False, "legend.handlelength": 1.6, "figure.dpi": 150, "savefig.bbox": "tight",
+    # Embed the text as TrueType fonts. The default (Type 3) is drawn blurry or jagged by many PDF viewers
+    "pdf.fonttype": 42,
+    # Resolution of the images inside the PDFs (the 2D maps), the lines and text stay vector graphics
+    "savefig.dpi": 300,
 }
 
 
