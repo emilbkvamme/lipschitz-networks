@@ -1,0 +1,130 @@
+L_data = 5.672 (l2), scanning L = [  4.538   5.627   6.978   8.652  10.729  13.304  16.497  20.457  25.367
+  31.456  39.006  48.368  59.977  74.372  92.223 114.359 141.807]
+Seed 0: training 18 networks
+Saved the results to /Users/emilbarkkvamme/Documents/Studier/Master og Prosjekt/Prosjekt/Lipschitz_concept/Simulated/Results/L_scan_cartesian_l2/L_scan_seed0.pkl
+       L        MSE      MAE   slope  epochs  best  within 1%
+    4.54  4.038e-04   0.0121   3.673     200   200        145  hit the cap: last weights, not the best
+    5.63  1.683e-04   0.0078   4.321     200   197        174  hit the cap: last weights, not the best
+    6.98  9.604e-05   0.0059   4.978     200   200        139  hit the cap: last weights, not the best
+    8.65  1.016e-04   0.0064   5.376     200   199        189  hit the cap: last weights, not the best
+    10.7  1.081e-04   0.0068   5.600     200   199        142  hit the cap: last weights, not the best
+    13.3  6.766e-05   0.0055   5.837     200   200        187  hit the cap: last weights, not the best
+    16.5  6.737e-05   0.0054   5.702     200   198        182  hit the cap: last weights, not the best
+    20.5  1.535e-04   0.0085   5.912     200   200        176  hit the cap: last weights, not the best
+    25.4  7.813e-05   0.0059   5.565     200   199        171  hit the cap: last weights, not the best
+    31.5  1.594e-04   0.0083   5.741     200   199        185  hit the cap: last weights, not the best
+      39  4.252e-05   0.0043   6.839     200   197        177  hit the cap: last weights, not the best
+    48.4  4.975e-05   0.0048   6.097     200   199        129  hit the cap: last weights, not the best
+      60  7.636e-05   0.0058   6.747     200   197        178  hit the cap: last weights, not the best
+    74.4  4.819e-05   0.0045   6.325     200   199        171  hit the cap: last weights, not the best
+    92.2  6.904e-05   0.0054   6.766     200   197        172  hit the cap: last weights, not the best
+     114  8.893e-05   0.0063   6.984     200   199        176  hit the cap: last weights, not the best
+     142  5.083e-05   0.0046   7.781     200   197        179  hit the cap: last weights, not the best
+    none  2.744e-05   0.0037   7.675     200   199        154  hit the cap: last weights, not the best
+Seed 1: training 18 networks
+Saved the results to /Users/emilbarkkvamme/Documents/Studier/Master og Prosjekt/Prosjekt/Lipschitz_concept/Simulated/Results/L_scan_cartesian_l2/L_scan_seed1.pkl
+       L        MSE      MAE   slope  epochs  best  within 1%
+    4.54  1.609e-04   0.0074   3.979     200   196        157  hit the cap: last weights, not the best
+    5.63  6.472e-05   0.0048   4.757     200   197        148  hit the cap: last weights, not the best
+    6.98  9.838e-05   0.0062   4.785     200   198        153  hit the cap: last weights, not the best
+    8.65  7.443e-05   0.0052   5.012     200   197        124  hit the cap: last weights, not the best
+    10.7  5.059e-05   0.0044   5.545     200   200        181  hit the cap: last weights, not the best
+    13.3  4.111e-05   0.0039   5.768     200   199        165  hit the cap: last weights, not the best
+    16.5  5.996e-05   0.0050   5.488     200   197        159  hit the cap: last weights, not the best
+    20.5  8.117e-05   0.0057   5.323     200   200        190  hit the cap: last weights, not the best
+    25.4  6.808e-05   0.0053   5.698     200   198        168  hit the cap: last weights, not the best
+    31.5  7.089e-05   0.0055   5.688     200   198        141  hit the cap: last weights, not the best
+      39  6.954e-05   0.0056   6.093     200   194        191  hit the cap: last weights, not the best
+    48.4  2.996e-04   0.0117   6.033     200   200        168  hit the cap: last weights, not the best
+      60  1.136e-04   0.0071   6.539     200   199        189  hit the cap: last weights, not the best
+    74.4  1.015e-04   0.0069   7.146     200   199        169  hit the cap: last weights, not the best
+    92.2  6.484e-05   0.0053   6.576     200   196        177  hit the cap: last weights, not the best
+     114  1.389e-04   0.0078   6.462     200   196        175  hit the cap: last weights, not the best
+     142  6.585e-05   0.0056   7.177     200   200        194  hit the cap: last weights, not the best
+    none  2.797e-05   0.0037   7.294     200   195        153  hit the cap: last weights, not the best
+Seed 2: training 18 networks
+Saved the results to /Users/emilbarkkvamme/Documents/Studier/Master og Prosjekt/Prosjekt/Lipschitz_concept/Simulated/Results/L_scan_cartesian_l2/L_scan_seed2.pkl
+       L        MSE      MAE   slope  epochs  best  within 1%
+    4.54  9.939e-05   0.0055   4.219     200   199        155  hit the cap: last weights, not the best
+    5.63  8.671e-05   0.0055   4.491     200   199        144  hit the cap: last weights, not the best
+    6.98  8.630e-05   0.0058   4.879     200   196        138  hit the cap: last weights, not the best
+    8.65  5.310e-05   0.0046   5.202     200   199        145  hit the cap: last weights, not the best
+    10.7  3.738e-05   0.0038   5.688     200   200        148  hit the cap: last weights, not the best
+    13.3  4.926e-05   0.0044   5.634     200   199        176  hit the cap: last weights, not the best
+    16.5  4.506e-05   0.0043   5.655     200   200        148  hit the cap: last weights, not the best
+    20.5  3.573e-05   0.0036   5.973     200   196        146  hit the cap: last weights, not the best
+    25.4  3.336e-05   0.0037   6.285     200   193        136  hit the cap: last weights, not the best
+    31.5  4.224e-05   0.0042   6.318     200   196        168  hit the cap: last weights, not the best
+      39  4.366e-05   0.0042   6.052     200   198        196  hit the cap: last weights, not the best
+    48.4  4.376e-05   0.0043   6.899     200   197        189  hit the cap: last weights, not the best
+      60  5.202e-05   0.0048   6.495     200   200        150  hit the cap: last weights, not the best
+    74.4  4.409e-05   0.0043   6.794     200   200        185  hit the cap: last weights, not the best
+    92.2  4.058e-05   0.0042   6.905     200   198        186  hit the cap: last weights, not the best
+     114  4.381e-05   0.0043   7.830     200   199        170  hit the cap: last weights, not the best
+     142  6.950e-05   0.0057   7.382     200   200        184  hit the cap: last weights, not the best
+    none  2.654e-05   0.0036   7.568     200   197        145  hit the cap: last weights, not the best
+L_data = 1.045 (l2), scanning L = [ 0.836  1.036  1.285  1.593  1.976  2.45   3.038  3.767  4.671  5.792
+  7.183  8.907 11.044 13.695 16.982 21.059 26.113]
+Seed 0: training 18 networks
+Saved the results to /Users/emilbarkkvamme/Documents/Studier/Master og Prosjekt/Prosjekt/Lipschitz_concept/Simulated/Results/L_scan_pt_angles_l2/L_scan_seed0.pkl
+       L        MSE      MAE   slope  epochs  best  within 1%
+   0.836  9.321e-04   0.0133   0.834     200   200        115  hit the cap: last weights, not the best
+    1.04  1.266e-04   0.0043   0.969     200   199        140  hit the cap: last weights, not the best
+    1.28  1.231e-06   0.0006   1.193     200   199        155  hit the cap: last weights, not the best
+    1.59  4.186e-07   0.0004   1.219     200   199        189  hit the cap: last weights, not the best
+    1.98  5.590e-07   0.0005   1.218     200   200        183  hit the cap: last weights, not the best
+    2.45  6.070e-07   0.0005   1.236     200   197        165  hit the cap: last weights, not the best
+    3.04  7.630e-07   0.0006   1.245     200   199        170  hit the cap: last weights, not the best
+    3.77  9.466e-07   0.0007   1.247     200   198        161  hit the cap: last weights, not the best
+    4.67  1.011e-06   0.0007   1.276     200   199        190  hit the cap: last weights, not the best
+    5.79  9.784e-07   0.0007   1.297     200   199        173  hit the cap: last weights, not the best
+    7.18  9.210e-07   0.0007   1.318     200   198        184  hit the cap: last weights, not the best
+    8.91  1.095e-06   0.0007   1.326     200   198        180  hit the cap: last weights, not the best
+      11  1.036e-06   0.0007   1.342     200   197        192  hit the cap: last weights, not the best
+    13.7  1.775e-06   0.0010   1.372     200   194        188  hit the cap: last weights, not the best
+      17  1.713e-06   0.0010   1.364     200   195        185  hit the cap: last weights, not the best
+    21.1  5.722e-07   0.0005   1.390     200   200        182  hit the cap: last weights, not the best
+    26.1  2.321e-07   0.0003   1.411     200   200        199  hit the cap: last weights, not the best
+    none  3.873e-06   0.0014   1.244     200   198        155  hit the cap: last weights, not the best
+Seed 1: training 18 networks
+Saved the results to /Users/emilbarkkvamme/Documents/Studier/Master og Prosjekt/Prosjekt/Lipschitz_concept/Simulated/Results/L_scan_pt_angles_l2/L_scan_seed1.pkl
+       L        MSE      MAE   slope  epochs  best  within 1%
+   0.836  7.869e-04   0.0138   0.836     200   185         86  hit the cap: last weights, not the best
+    1.04  1.808e-04   0.0061   1.024     200   200        122  hit the cap: last weights, not the best
+    1.28  7.442e-06   0.0018   1.227     200   200        159  hit the cap: last weights, not the best
+    1.59  2.609e-06   0.0011   1.259     200   197        175  hit the cap: last weights, not the best
+    1.98  1.319e-06   0.0007   1.217     200   195        179  hit the cap: last weights, not the best
+    2.45  7.924e-07   0.0006   1.210     200   199        175  hit the cap: last weights, not the best
+    3.04  2.720e-06   0.0011   1.135     200   196        185  hit the cap: last weights, not the best
+    3.77  1.830e-06   0.0009   1.153     200   199        172  hit the cap: last weights, not the best
+    4.67  2.161e-06   0.0010   1.132     200   196        189  hit the cap: last weights, not the best
+    5.79  2.442e-06   0.0011   1.155     200   196        165  hit the cap: last weights, not the best
+    7.18  3.015e-06   0.0012   1.186     200   196        177  hit the cap: last weights, not the best
+    8.91  3.534e-06   0.0013   1.220     200   197        156  hit the cap: last weights, not the best
+      11  3.175e-06   0.0012   1.198     200   199        152  hit the cap: last weights, not the best
+    13.7  3.282e-06   0.0013   1.218     200   200        192  hit the cap: last weights, not the best
+      17  2.615e-06   0.0012   1.262     200   200        179  hit the cap: last weights, not the best
+    21.1  3.584e-06   0.0014   1.357     200   199        178  hit the cap: last weights, not the best
+    26.1  4.154e-07   0.0004   1.456     200   200        200  hit the cap: last weights, not the best
+    none  3.063e-06   0.0013   1.293     200   199        137  hit the cap: last weights, not the best
+Seed 2: training 18 networks
+Saved the results to /Users/emilbarkkvamme/Documents/Studier/Master og Prosjekt/Prosjekt/Lipschitz_concept/Simulated/Results/L_scan_pt_angles_l2/L_scan_seed2.pkl
+       L        MSE      MAE   slope  epochs  best  within 1%
+   0.836  3.443e-04   0.0092   0.835     200   200        187  hit the cap: last weights, not the best
+    1.04  1.167e-04   0.0043   1.036     200   198        111  hit the cap: last weights, not the best
+    1.28  3.624e-06   0.0012   1.269     200   200        142  hit the cap: last weights, not the best
+    1.59  2.441e-06   0.0010   1.327     200   197        173  hit the cap: last weights, not the best
+    1.98  3.859e-06   0.0012   1.324     200   198        185  hit the cap: last weights, not the best
+    2.45  1.922e-06   0.0009   1.279     200   199        185  hit the cap: last weights, not the best
+    3.04  2.667e-06   0.0011   1.235     200   200        181  hit the cap: last weights, not the best
+    3.77  1.975e-06   0.0009   1.197     200   196        159  hit the cap: last weights, not the best
+    4.67  2.648e-06   0.0011   1.205     200   198        169  hit the cap: last weights, not the best
+    5.79  1.721e-06   0.0009   1.267     200   197        158  hit the cap: last weights, not the best
+    7.18  2.213e-06   0.0010   1.297     200   197        176  hit the cap: last weights, not the best
+    8.91  2.221e-06   0.0010   1.242     200   200        180  hit the cap: last weights, not the best
+      11  2.745e-06   0.0011   1.293     200   199        188  hit the cap: last weights, not the best
+    13.7  3.973e-06   0.0014   1.296     200   200        160  hit the cap: last weights, not the best
+      17  4.099e-06   0.0014   1.336     200   198        157  hit the cap: last weights, not the best
+    21.1  3.734e-07   0.0004   1.492     200   199        168  hit the cap: last weights, not the best
+    26.1  3.258e-06   0.0013   1.453     200   196        187  hit the cap: last weights, not the best
+    none  3.239e-06   0.0013   1.207     200   197        161  hit the cap: last weights, not the best
