@@ -42,9 +42,11 @@ def evaluate(model, dataloader, loss_fn, device):
 
     return val_loss / total_samples
 
-def train(model, train_loader, val_loader, optimizer, loss_fn, num_epochs, max_iter, device, train_eval_loader=None, verbose=True):
+def train(model, train_loader, val_loader, optimizer, loss_fn, num_epochs, max_iter, device, train_eval_loader=None, verbose=True,
+          scheduler=None):
     # train_eval_loader: optional loader over the training data used only for computing the training loss after each epoch.
     # Passing one with a large batch size makes this much cheaper than iterating the (small batch) train_loader again.
+    # scheduler: optional ReduceLROnPlateau, which lowers the learning rate when the validation loss stops improving.
     if train_eval_loader is None:
         train_eval_loader = train_loader
 
@@ -59,6 +61,8 @@ def train(model, train_loader, val_loader, optimizer, loss_fn, num_epochs, max_i
         train_epoch(model, train_loader, optimizer, loss_fn, device)
         train_loss = evaluate(model, train_eval_loader, loss_fn, device)
         val_loss = evaluate(model, val_loader, loss_fn, device)
+        if scheduler is not None:
+            scheduler.step(val_loss)
 
         train_losses.append(train_loss)
         val_losses.append(val_loss)
@@ -99,10 +103,12 @@ def predict(model, dataloader, device):
 # trainings (e.g. a scan over Lipschitz constants, depths or widths) can run side by side in separate processes.
 
 def fit(model_cls, model_kwargs, trn_data, val_data, test_data, lr, num_epochs, batch_size,
-        max_iter=None, seed=42, eval_batch_size=4096, device="cpu"):
+        max_iter=None, lr_patience=None, seed=42, eval_batch_size=4096, device="cpu"):
     # Trains a single model with Adam and MSE loss. The *_data arguments are (inputs, targets) tuples of tensors.
     # max_iter is the early stopping patience of train(), None means no early stopping.
-    # Returns a dictionary with the per-epoch losses and the test predictions.
+    # lr_patience: halve the learning rate when the validation loss has not improved for more than this many epochs.
+    # None means a constant learning rate.
+    # Returns a dictionary with the per-epoch losses, the test predictions and the trained weights (to rebuild the model).
     if max_iter is None:
         max_iter = num_epochs
     torch.manual_seed(seed)
@@ -116,13 +122,17 @@ def fit(model_cls, model_kwargs, trn_data, val_data, test_data, lr, num_epochs, 
 
     model = model_cls(**model_kwargs).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    scheduler = None
+    if lr_patience is not None:
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5, patience=lr_patience)
 
     train_losses, val_losses = train(model, trn_loader, val_loader, optimizer, nn.MSELoss(), num_epochs, max_iter, device,
-                                     train_eval_loader=trn_eval_loader, verbose=False)
+                                     train_eval_loader=trn_eval_loader, verbose=False, scheduler=scheduler)
 
     return {"train_losses": train_losses,
             "val_losses": val_losses,
-            "predictions": predict(model, test_loader, device)}
+            "predictions": predict(model, test_loader, device),
+            "state_dict": model.state_dict()}
 
 def _fit_worker(job):
     torch.set_num_threads(1)
