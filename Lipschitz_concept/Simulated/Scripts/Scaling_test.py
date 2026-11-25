@@ -15,11 +15,9 @@
     # 3. On every subset: one Lipschitz network per L_RATIO and one unconstrained network. Every network gets the same
     #    number of gradient steps, so a network on a small subset is not also trained for a shorter time.
     # 4. Plots: MSE, MAE and used slope against the number of training events, and for every subset size the
-    #    distribution of the test errors (truth - prediction) of its networks. For the networks on all events: the mean
-    #    error against the true |M|^2, which shows where the bound cuts off the steepest peaks.
+    #    distribution of the test errors (truth - prediction) of its networks, and the mean error against the true |M|^2
+    #    (where does the bound cut off the steepest peaks?), with the distribution of the true |M|^2 below it.
 
-# RUN (from the Scripts folder):  python Scaling_test.py           the full test
-#                                 python Scaling_test.py --quick   a test of a few minutes: 2 fractions, 1 seed, short training
 
 # ======== IMPORTS ============#
 import os
@@ -275,6 +273,9 @@ def plot_bias_vs_truth(all_results, fraction, L_arr, L_ratios, y_test, plot_dir,
     Positive: the network predicts too low. A network whose slope is limited cannot climb all the way up the steepest
     peaks of |M|^2, so it predicts too low there, and more so the higher the peak.
     Bins with fewer than min_events test events are left out: their mean would rest on one or two events.
+    Lower panel: the distribution of the true log10 |M|^2 of the test events, in the same bins, to compare the shape of
+    the bias with how many events there are at each height. The training subset has the same shape, with
+    (training events / test events) times as many events in every bin.
     """
     y_true = y_test[:, 0]
     edges = np.arange(-1, 3.01, 0.25) # The true log10 |M|^2 runs from -0.78 to 2.84
@@ -287,16 +288,24 @@ def plot_bias_vs_truth(all_results, fraction, L_arr, L_ratios, y_test, plot_dir,
             in_bins.append(in_bin)
 
     shades = plt.cm.Oranges(np.linspace(0.5, 0.9, len(L_arr)))
-    fig, ax = plt.subplots(figsize=PANEL_SIZE)
+    # Two panels on the same x axis: the bias on top, the distribution of the target below (half as high)
+    fig, (ax, ax_hist) = plt.subplots(2, 1, figsize=(PANEL_SIZE[0], 1.5 * PANEL_SIZE[1]), sharex=True,
+                                      gridspec_kw=dict(height_ratios=[2, 1], hspace=0.08))
     ax.axhline(0, color="black", lw=0.8) # No bias: the network is right on average
     for i in range(len(L_arr)):
         plot_errorbars(ax, centres, mean_error_in_bins(all_results, fraction, float(L_arr[i]), y_true, in_bins),
                        shades[i], f"{L_ratios[i]:g}" + r" $L_\mathrm{data}$")
     plot_errorbars(ax, centres, mean_error_in_bins(all_results, fraction, None, y_true, in_bins), C_UNCONSTRAINED,
                    "Unconstrained")
-    ax.set_xlabel(r"True $\log_{10}|M|^2$")
+    n_train = find_network(all_results[0], fraction, None)["n_train"]
+    ax.set_title(f"{n_train} training events") # The plots of the subsets look alike otherwise
     ax.set_ylabel(r"Mean truth $-$ prediction")
     ax.legend(frameon=False, loc="upper left")
+
+    ax_hist.hist(y_true, bins=edges, histtype="step", color="black")
+    ax_hist.set_yscale("log")
+    ax_hist.set_xlabel(r"True $\log_{10}|M|^2$")
+    ax_hist.set_ylabel("Test events")
     save_figure(fig, plot_dir, file_name)
 
 
@@ -384,9 +393,10 @@ def main():
     for i in range(len(FRACTIONS)):
         plot_errors_one_fraction(all_results[0], FRACTIONS[i], L_arr, L_RATIOS, test_data[1].numpy(), PLOT_DIR,
                                  f"errors_{n_events[i]}_events{ending}.pdf")
-    # The mean error against the true |M|^2, for the networks trained on all events: where does the bound cut the peaks?
-    plot_bias_vs_truth(all_results, FRACTIONS[-1], L_arr, L_RATIOS, test_data[1].numpy(), PLOT_DIR,
-                       f"bias_vs_truth{ending}.pdf")
+    # The mean error against the true |M|^2, one plot per subset: where does the bound cut the peaks?
+    for i in range(len(FRACTIONS)):
+        plot_bias_vs_truth(all_results, FRACTIONS[i], L_arr, L_RATIOS, test_data[1].numpy(), PLOT_DIR,
+                           f"bias_vs_truth_{n_events[i]}_events{ending}.pdf")
     return
 
 # The networks are trained in parallel processes, which on macOS start a fresh Python that imports this file.
