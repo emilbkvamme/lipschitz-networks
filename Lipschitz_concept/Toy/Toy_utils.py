@@ -251,14 +251,14 @@ REPORT_STYLE = {
 
 
 ###### FOLDERS ######
-# Every test writes to Plots/<dimension>/<topic> and Results/<dimension>/<topic> inside the Toy folder,
-# no matter which folder the script is run from.
-TOY_DIR = os.path.dirname(os.path.abspath(__file__))
+# No folder is fixed here. Every script sets its own TOY_DIR (by default the Toy folder, found from the script's own
+# location) and passes it in, so a test writes to <toy_dir>/Plots/<dimension>/<topic> and
+# <toy_dir>/Results/<dimension>/<topic> no matter which folder it is run from.
 
 
-def plot_dir(dimension, topic):
-    """The plot folder of one test, e.g. plot_dir("1D", "Optimal_solution"). Made if it does not exist."""
-    path = os.path.join(TOY_DIR, "Plots", dimension, topic)
+def plot_dir(toy_dir, dimension, topic):
+    """The plot folder of one test, e.g. plot_dir(TOY_DIR, "1D", "Optimal_solution"). Made if it does not exist."""
+    path = os.path.join(toy_dir, "Plots", dimension, topic)
     os.makedirs(path, exist_ok=True)
     return path
 
@@ -279,8 +279,9 @@ def load_results(file_name):
     return results
 
 
-def results_dir(dimension, topic):
-    """The folder for the saved training results of one test. Made if it does not exist."""
-    path = os.path.join(TOY_DIR, "Results", dimension, topic)
+def results_dir(toy_dir, dimension, topic):
+    """The folder for the saved training results of one test, e.g. results_dir(TOY_DIR, "2D", "Sine_noise").
+    Made if it does not exist."""
+    path = os.path.join(toy_dir, "Results", dimension, topic)
     os.makedirs(path, exist_ok=True)
     return path

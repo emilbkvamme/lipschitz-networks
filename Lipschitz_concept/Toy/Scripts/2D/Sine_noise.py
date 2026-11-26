@@ -18,16 +18,20 @@ import matplotlib
 matplotlib.use("Agg")              # no windows: the figures are only saved to files
 from matplotlib import pyplot as plt
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # the Toy folder
+# PATHS, for this script only: relative to this file by default, so it runs from any folder and on any machine.
+# The plot and result folders below are made from TOY_DIR; point it (or them) elsewhere to write somewhere else.
+TOY_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # the Toy folder
+sys.path.insert(0, TOY_DIR)
 from Toy_utils import REPORT_STYLE, noise_removed, plot_dir, results_dir, save_results, load_results
-from Toy_nd_utils import (gaussian_nd, isotropic_cov, isotropic_lipschitz_constant, make_grid, wavevector,
+from Toy_nd_utils import (max_cores_from_argv, gaussian_nd, isotropic_cov, isotropic_lipschitz_constant, make_grid, wavevector,
                           mode_amplitude_nd, radial_spectrum, central_line, fwhm_equivalent, train_many)
 
 #======= SETTINGS =======
+MAX_CORES = max_cores_from_argv()   # the most cores the training may use: python <script> --max-cores N (None: all but one)
 QUICK = "--quick" in sys.argv      # python Sine_noise.py --quick: fewer points, short training, only to check that everything runs
 LOAD_SAVED = True                  # True: use the saved networks if they were trained on the same data and settings
 # Not networks.pkl: that file in the same folder is from the old Sine_noise.py and has another structure
-NETWORKS_FILE = os.path.join(results_dir("2D", "Sine_noise"), "L_scan_quick.pkl" if QUICK else "L_scan.pkl")
+NETWORKS_FILE = os.path.join(results_dir(TOY_DIR, "2D", "Sine_noise"), "L_scan_quick.pkl" if QUICK else "L_scan.pkl")
 
 # The Gaussian: round, sigma = 1, in the box [-4, 4)^2 (at the edge it is 3e-4 of its peak)
 DIM = 2
@@ -77,7 +81,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 N_WORKERS = 8 if DEVICE == "cuda" else None     # None: all CPU cores but one
 
 # The plots, in the same format as in 1D (Scripts/1D/Noise_response.py)
-PLOT_DIR = plot_dir("2D", "Sine_noise")
+PLOT_DIR = plot_dir(TOY_DIR, "2D", "Sine_noise")
 L_RATIOS_SHOW = [0.3, 1, 3, 10]    # the networks shown in the fits (the nearest L in the scan)
 K_MAX_SHOWN = 25                   # highest |k| in the spectra (the shortest wave has |k| = 18.8)
 # The measures of the L scan: name -> (y label, file name, logarithmic y axis)
@@ -179,7 +183,7 @@ def L_scan(L_ratio, L_true, data, seeds):
 
     print("Training %d networks until converged on the %s" % (len(jobs), DEVICE))
     start = time.time()
-    results = train_many(jobs, n_workers=N_WORKERS)     # in the same order as the jobs
+    results = train_many(jobs, max_cores=MAX_CORES, n_workers=N_WORKERS)     # in the same order as the jobs
     print("Trained in %.1f min" % ((time.time() - start) / 60))
 
     n_L = len(L_ratio)

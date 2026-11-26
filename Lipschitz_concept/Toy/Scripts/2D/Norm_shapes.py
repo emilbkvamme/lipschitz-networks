@@ -27,15 +27,19 @@ matplotlib.use("Agg")              # no windows: the figures are only saved to f
 import matplotlib.pyplot as plt
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # the Toy folder
+# PATHS, for this script only: relative to this file by default, so it runs from any folder and on any machine.
+# The plot and result folders below are made from TOY_DIR; point it (or them) elsewhere to write somewhere else.
+TOY_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # the Toy folder
+sys.path.insert(0, TOY_DIR)
 from Toy_utils import REPORT_STYLE, plot_dir, results_dir, save_results, load_results
-from Toy_nd_utils import (gaussian_nd, isotropic_cov, isotropic_lipschitz_constant, pyramid_radius, make_grid,
+from Toy_nd_utils import (max_cores_from_argv, gaussian_nd, isotropic_cov, isotropic_lipschitz_constant, pyramid_radius, make_grid,
                           grid_gradient, fwhm_along, train_many)
 from lipschitz_floor import lipschitz_floor_nd
 
+MAX_CORES = max_cores_from_argv()   # the most cores the training may use: python <script> --max-cores N (None: all but one)
 QUICK = False                      # True: small grid, short training, only to check that everything runs
-PLOT_DIR = plot_dir("2D", "Norms_and_rotations")
-RESULTS_FILE = os.path.join(results_dir("2D", "Norms_and_rotations"),
+PLOT_DIR = plot_dir(TOY_DIR, "2D", "Norms_and_rotations")
+RESULTS_FILE = os.path.join(results_dir(TOY_DIR, "2D", "Norms_and_rotations"),
                             "norm_shapes_quick.pkl" if QUICK else "norm_shapes.pkl")
 LOAD_SAVED = True                  # True: use the saved floors and networks if they exist, instead of computing again
 
@@ -87,7 +91,7 @@ def train_networks(X, x_train, y_train, L, shape, norms):
                                    depth=DEPTH, lipschitz_bound=L, input_norm=norm))
             for norm in norms]
     print(f"Training {len(jobs)} networks on {len(x_train)} random points")
-    results = train_many(jobs)
+    results = train_many(jobs, max_cores=MAX_CORES)
     return {norm: result["prediction"].reshape(shape) for norm, result in zip(norms, results)}
 
 

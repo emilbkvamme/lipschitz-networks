@@ -13,14 +13,18 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # the Toy folder
-from Toy_nd_utils import *
+# PATHS, for this script only: relative to this file by default, so it runs from any folder and on any machine.
+# The plot and result folders below are made from TOY_DIR; point it (or them) elsewhere to write somewhere else.
+TOY_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # the Toy folder
+sys.path.insert(0, TOY_DIR)
+from Toy_nd_utils import *   # includes max_cores_from_argv
 from Toy_utils import REPORT_STYLE, plot_dir, results_dir, save_results, load_results
 from Toy_coordinate_basis import cartesian_to_hyperspherical
 
+MAX_CORES = max_cores_from_argv()   # the most cores the training may use: python <script> --max-cores N (None: all but one)
 QUICK = False                       # True: short training, only to check that everything runs
-PLOT_DIR = plot_dir("2D", "Missing_data")
-RESULTS_FILE = os.path.join(results_dir("2D", "Missing_data"), "results_quick.pkl" if QUICK else "results.pkl")   # the trained predictions and measures, saved after the scan
+PLOT_DIR = plot_dir(TOY_DIR, "2D", "Missing_data")
+RESULTS_FILE = os.path.join(results_dir(TOY_DIR, "2D", "Missing_data"), "results_quick.pkl" if QUICK else "results.pkl")   # the trained predictions and measures, saved after the scan
 LOAD_SAVED = True                  # True: make the plots from RESULTS_FILE if it exists, instead of training again
 BASES = ["cartesian", "polar"]     # the input coordinates of the networks (polar = 2D spherical: (r, phi))
 LR_LIPSCHITZ = 1e-2                # the Lipschitz networks learn slowly with 3e-3 (their step size scales with L)
@@ -88,7 +92,7 @@ def L_scan(X, truth, missing, axes, L_ratios, L_true, seeds, steps, basis="carte
                              model_kwargs=model_kwargs))
             labels.append(key)
 
-    results = train_many(jobs)              # all networks in parallel, same order as jobs
+    results = train_many(jobs, max_cores=MAX_CORES)              # all networks in parallel, same order as jobs
 
     scan = {key: {"MSE_gap": [], "AE_gap": [], "MSE_rest": [], "FWHM": [], "predictions": []} for key in keys}
     for key, result in zip(labels, results):

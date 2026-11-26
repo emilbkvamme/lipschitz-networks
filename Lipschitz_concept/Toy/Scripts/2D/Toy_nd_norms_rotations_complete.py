@@ -38,17 +38,21 @@ import matplotlib
 matplotlib.use("Agg")              # no windows: the figures are only saved to files
 import matplotlib.pyplot as plt
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # the Toy folder
+# PATHS, for this script only: relative to this file by default, so it runs from any folder and on any machine.
+# The plot and result folders below are made from TOY_DIR; point it (or them) elsewhere to write somewhere else.
+TOY_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # the Toy folder
+sys.path.insert(0, TOY_DIR)
 from Toy_utils import REPORT_STYLE, plot_dir, results_dir, save_results, load_results
-from Toy_nd_utils import gaussian_nd, pyramid_radius, make_grid, grid_integral, profile, train_many
+from Toy_nd_utils import max_cores_from_argv, gaussian_nd, pyramid_radius, make_grid, grid_integral, profile, train_many
 from lipschitz_floor import lipschitz_floor_nd
 
 
 ##### SETTINGS #####
+MAX_CORES = max_cores_from_argv()   # the most cores the training may use: python <script> --max-cores N (None: all but one)
 QUICK = False        # True: coarse grid, few angles and short training, only to check that everything runs
 LOAD_SAVED = True    # True: use the saved floors and networks if they were computed with the same settings
-PLOT_DIR = plot_dir("2D", "Norms_and_rotations")
-RESULTS_FILE = os.path.join(results_dir("2D", "Norms_and_rotations"), "rotations_quick.pkl" if QUICK else "rotations.pkl")
+PLOT_DIR = plot_dir(TOY_DIR, "2D", "Norms_and_rotations")
+RESULTS_FILE = os.path.join(results_dir(TOY_DIR, "2D", "Norms_and_rotations"), "rotations_quick.pkl" if QUICK else "rotations.pkl")
 
 NORMS = ["l1", "l2", "linf"]
 NORM_LABELS = {"l1": r"$\ell_1$", "l2": r"$\ell_2$", "linf": r"$\ell_\infty$"}
@@ -260,7 +264,7 @@ def network_scan():
     print(f"Training {len(jobs)} networks on {len(x_train)} random points, evaluated on the {len(axes[0])}^2 grid, "
           f"L = {L:.2f}")
     start = time.time()
-    results = train_many(jobs)
+    results = train_many(jobs, max_cores=MAX_CORES)
     print(f"   done in {time.time() - start:.0f} s")
 
     # Sort the results back per norm and angle, in the same order as the jobs

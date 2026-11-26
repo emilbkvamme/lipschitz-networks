@@ -20,7 +20,7 @@ import numpy as np
 # The functions for the data, the scan and the plots are in Simulation_utils.py (in the Simulated folder, one up),
 # shared by all the tests on the simulated data. Importing it also sets the plot style of the report.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from Simulation_utils import (DATA_PATH, plot_dir, results_dir, get_simulated_data, drop_constant_columns,
+from Simulation_utils import (max_cores_from_argv, limit_cores, int_from_argv, scaled_lr, get_simulated_data, drop_constant_columns,
                               split_sim_data, standardize, lipschitz_bound_estimate_of_data, L_scan_all_seeds, collect,
                               plot_scan, plot_training_losses, plot_selected_fits, plot_predictions)
 
@@ -33,14 +33,24 @@ TRIAL = False
 
 
 def main():
-    # DEFINING PATHS AND PARAMETERS
+    # PATHS, for this script only. By default relative to this file, so the script runs from any folder and on any
+    # machine. Point them elsewhere to read the data from, or write the plots and results to, another place.
+    SIM_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))  # the Simulated folder
+    DATA_PATH = os.path.join(SIM_DIR, "zg.npy")                    # the simulated qq->Zg events
+    PLOT_DIR = os.path.join(SIM_DIR, "Plots", TEST_NAME)
+    RESULTS_DIR = os.path.join(SIM_DIR, "Results", TEST_NAME)      # the result files and the trained networks
+
+    # PARAMETERS
     L_RATIOS = np.logspace(-1.5, 0.5, 9) # L / L_data from 0.03 to 3, with a point at exactly 1
     SEEDS = [0, 1, 2, 3, 4] # One full scan per seed, for the spread between trainings
-    PLOT_DIR = plot_dir(TEST_NAME)
+    # The most cores the run may use (None: half of them). Change it on the command line with --max-cores N.
+    MAX_CORES = max_cores_from_argv(default=None)
 
-    LR = 3e-3 # The learning rate at the start
     LR_PATIENCE = 5 # Halve the learning rate when the validation loss has not improved for more than this many epochs
-    BATCH_SIZE = 1024 # 444 steps per epoch, about 2.5 s per epoch on one core (batch 64: about 6 s)
+    # Batch size: --batch-size N on the command line (default 1024, 445 steps per epoch). The learning rate at the start
+    # is 3e-3 at batch 1024 and scales with sqrt(batch size / 1024) (see scaled_lr in train_eval.py).
+    BATCH_SIZE = int_from_argv("--batch-size", 1024)
+    LR = scaled_lr(3e-3, BATCH_SIZE)
     NUM_EPOCHS = 200 # The cap: early stopping normally ends the training before
     MAX_ITER = 20 # Early stopping patience: stop when the validation loss has not improved for this many epochs
     DEPTH = 3
@@ -53,6 +63,10 @@ def main():
         NUM_EPOCHS = 300
         MAX_ITER = NUM_EPOCHS # No early stopping: the whole validation curve
     ending = "_trial" if TRIAL else "" # The trial run gets its own result and plot files
+    if BATCH_SIZE != 1024:
+        ending += f"_bs{BATCH_SIZE}" # other batch sizes get their own result and plot files
+
+    limit_cores(MAX_CORES) # The threads of this process too (the slope calculations, the neighbour search)
 
     # LOAD SIMULATION DATA: the 16 Cartesian momentum columns, and |M|^2
     data, target = get_simulated_data(DATA_PATH)
@@ -68,7 +82,7 @@ def main():
     train_data, val_data, test_data = standardize(train_data, val_data, test_data)
 
     # L OF THE DATA, and the L values of the scan
-    L_data = lipschitz_bound_estimate_of_data(train_data[0], train_data[1], norm=1) # p = 1: the l1 distance, as the networks
+    L_data = lipschitz_bound_estimate_of_data(train_data[0], train_data[1], norm=1, max_cores=MAX_CORES) # p = 1: the l1 distance, as the networks
     L_arr = L_RATIOS * L_data
     print(f"L_data = {L_data:.3f}, scanning L = {np.round(L_arr, 3)}")
 
@@ -83,7 +97,7 @@ def main():
     # One scan per seed, saved as soon as it is done (Results/L_scan_cartesian_l1/L_scan_seed<seed>.pkl). A seed that
     # is already saved with the same settings is loaded instead of trained again.
     all_results = L_scan_all_seeds(L_arr, train_data, val_data, test_data, model_params, training_params, INPUT_NORM,
-                                   SEEDS, os.path.join(results_dir(TEST_NAME), f"L_scan{ending}"))
+                                   SEEDS, os.path.join(RESULTS_DIR, f"L_scan{ending}"), max_cores=MAX_CORES)
 
     # PLOTTING
     plot_scan(L_RATIOS, collect(all_results, "MSE"), "MSE", PLOT_DIR, f"mse_vs_L{ending}.pdf")
@@ -92,7 +106,7 @@ def main():
               PLOT_DIR, f"used_slope_vs_L{ending}.pdf", show_bound=True)
     plot_training_losses(L_RATIOS, all_results[0], PLOT_DIR, f"validation_losses{ending}.pdf")
     if not TRIAL: # The trial has only two L values
-        plot_selected_fits(L_RATIOS, all_results[0], test_data[1].numpy(), PLOT_DIR, "test_errors_selected.pdf")
+        plot_selected_fits(L_RATIOS, all_results[0], test_data[1].numpy(), PLOT_DIR, f"test_errors_selected{ending}.pdf")
     plot_predictions(L_RATIOS, all_results[0], test_data[1].numpy(), PLOT_DIR, f"predictions{ending}.pdf")
     return
 

@@ -26,15 +26,19 @@ matplotlib.use("Agg")              # no windows: the figures are only saved to f
 import matplotlib.pyplot as plt
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # the Toy folder
+# PATHS, for this script only: relative to this file by default, so it runs from any folder and on any machine.
+# The plot and result folders below are made from TOY_DIR; point it (or them) elsewhere to write somewhere else.
+TOY_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # the Toy folder
+sys.path.insert(0, TOY_DIR)
 from Toy_utils import (REPORT_STYLE, gaussian_function, gaussian_lipschitz_constant, fourier_spectrum, noise_removed,
                        plot_dir, results_dir, save_results, load_results)
-from Toy_nd_utils import train_many
+from Toy_nd_utils import max_cores_from_argv, train_many
 
+MAX_CORES = max_cores_from_argv()   # the most cores the training may use: python <script> --max-cores N (None: all but one)
 QUICK = False                      # True: few points, short training, only to check that everything runs
 LOAD_SAVED = True                  # True: use the saved networks if they exist, instead of training again
 NOISE_KINDS = ["sine", "white"]
-PLOT_DIRS = {"sine": plot_dir("1D", "Sine_noise"), "white": plot_dir("1D", "White_noise")}
+PLOT_DIRS = {"sine": plot_dir(TOY_DIR, "1D", "Sine_noise"), "white": plot_dir(TOY_DIR, "1D", "White_noise")}
 
 # The Gaussian and the points, as in the notebook (but random training points)
 X_MIN, X_MAX = -5, 5
@@ -185,7 +189,7 @@ def train_networks(data, L_ratios):
         jobs.append(dict(kind="unconstrained", seed=seed, **common,
                          model_kwargs=dict(input_dim=1, hidden_dim=HIDDEN_DIM, output_dim=1, depth=DEPTH)))
     print(f"Training {len(jobs)} networks until converged")
-    results = iter(train_many(jobs))
+    results = iter(train_many(jobs, max_cores=MAX_CORES))
 
     n_seeds, n_L = len(SEEDS), len(L_ratios)
     networks = dict(grid=np.zeros((n_seeds, n_L, N_GRID)), train=np.zeros((n_seeds, n_L, N_TRAIN)),
@@ -209,7 +213,7 @@ def train_networks(data, L_ratios):
 def results_file(kind, scan):
     """The file with the saved networks of one noise kind and scan ("" for the main scan, "_zoom" for the zoom)."""
     quick = "_quick" if QUICK else ""
-    return os.path.join(results_dir("1D", f"{kind.capitalize()}_noise"), f"networks{scan}{quick}.pkl")
+    return os.path.join(results_dir(TOY_DIR, "1D", f"{kind.capitalize()}_noise"), f"networks{scan}{quick}.pkl")
 
 
 def saved_or_trained_networks(kind, data, L_ratios, scan=""):

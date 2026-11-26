@@ -5,15 +5,18 @@ matplotlib.use("Agg")              # no windows: the figures are only saved to f
 import matplotlib.pyplot as plt
 
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # the Toy folder
+# PATHS, for this script only: relative to this file by default, so it runs from any folder and on any machine.
+# The plot and result folders below are made from TOY_DIR; point it (or them) elsewhere to write somewhere else.
+TOY_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # the Toy folder
+sys.path.insert(0, TOY_DIR)
 from Toy_nd_utils import *
 from Toy_utils import REPORT_STYLE, plot_dir, results_dir, save_results, load_results
 
 # GOAL: investigate the effect of different norms on training of the Lipschitz Network.
 
 QUICK = False       # True: short training, only to check that everything runs
-PLOT_DIR = plot_dir("2D", "Norms_and_rotations")
-RESULTS_FILE = os.path.join(results_dir("2D", "Norms_and_rotations"), "norms_test_quick.pkl" if QUICK else "norms_test.pkl")
+PLOT_DIR = plot_dir(TOY_DIR, "2D", "Norms_and_rotations")
+RESULTS_FILE = os.path.join(results_dir(TOY_DIR, "2D", "Norms_and_rotations"), "norms_test_quick.pkl" if QUICK else "norms_test.pkl")
 LOAD_SAVED = True                  # True: make the plots from RESULTS_FILE if it exists, instead of training again
 
 

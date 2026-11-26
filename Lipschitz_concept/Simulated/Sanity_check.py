@@ -16,8 +16,9 @@
 # ======== IMPORTS ============#
 import os
 import numpy as np
-from Simulation_utils import (get_simulated_data, cartesian_to_pt_angles, drop_constant_columns, split_sim_data,
-                              standardize, lipschitz_bound_estimate_of_data)
+from Simulation_utils import (get_simulated_data, cartesian_to_pt_angles, cartesian_to_logpt_angles,
+                              logpt_angles_columns, drop_constant_columns, split_sim_data, standardize,
+                              lipschitz_bound_estimate_of_data)
 
 # ======== SETTINGS ============#
 SIM_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -122,10 +123,43 @@ for name, E, pT, phi, y, original in [("Z", pt_angles[:, 2], pt_angles[:, 3], pt
            f"{largest_difference:.1e} GeV)", largest_difference < 1e-6)
 
 
-# ======== 5. THE PREPARATION OF THE SCAN, FOR BOTH BASES ============#
+# ======== 4b. THE LOG PT + COS/SIN ANGLES TRANSFORMS ============#
+print("4b. The log pT + (cos phi, sin phi) transforms")
+logpt_bases = {}
+for polar in ("rapidity", "cos_theta"):
+    columns = logpt_angles_columns(polar)
+    inputs = cartesian_to_logpt_angles(data, polar)
+    logpt_bases[polar] = inputs
+    report(f"{polar}: shape {inputs.shape}, {len(columns)} columns", inputs.shape == (data.shape[0], len(columns)))
+    report(f"{polar}: no nan or inf (pT > 0 in every event, so log pT exists)", np.all(np.isfinite(inputs)))
+    print(f"  {'column':>12} {'min':>10} {'max':>10}")
+    for i in range(len(columns)):
+        print(f"  {columns[i]:>12} {inputs[:, i].min():10.3f} {inputs[:, i].max():10.3f}")
+    in_range = [i for i, name in enumerate(columns) if name.startswith(("cos_", "sin_"))]
+    report(f"{polar}: cos phi, sin phi{' and cos theta' if polar == 'cos_theta' else ''} between -1 and 1",
+           np.all(np.abs(inputs[:, in_range]) <= 1))
+    # Back to Cartesian: pT = exp(log pT), px = pT cos(phi), py = pT sin(phi), and pz = E tanh(y), or
+    # pz = |p| cos(theta) with |p| = pT / sin(theta) = pT / sqrt(1 - cos(theta)^2)
+    for name, start, original in [("Z", 2, Z), ("gluon", 7, g)]:
+        E, log_pT, cos_phi, sin_phi, along_beam = inputs[:, start:start + 5].T
+        pT = np.exp(log_pT)
+        report(f"{polar}, {name}: cos(phi)^2 + sin(phi)^2 = 1", np.allclose(cos_phi**2 + sin_phi**2, 1))
+        if polar == "rapidity":
+            pz = E * np.tanh(along_beam)
+        else:
+            pz = pT * along_beam / np.sqrt(1 - along_beam**2)
+        back = np.stack([E, pT * cos_phi, pT * sin_phi, pz], axis=1)
+        largest_difference = np.abs(back - original).max()
+        report(f"{polar}, {name}: transformed back to Cartesian gives the original momenta (largest difference "
+               f"{largest_difference:.1e} GeV)", largest_difference < 1e-6)
+
+
+# ======== 5. THE PREPARATION OF THE SCAN, FOR ALL BASES ============#
 print("5. The preparation of the scan")
 log_target = np.log10(target)
-for basis, inputs in [("Cartesian", data), ("pT + angles", pt_angles)]:
+for basis, inputs in [("Cartesian", data), ("pT + angles", pt_angles),
+                      ("log pT + cos/sin phi + y", logpt_bases["rapidity"]),
+                      ("log pT + cos/sin phi + cos theta", logpt_bases["cos_theta"])]:
     inputs = drop_constant_columns(inputs)
     train_data, val_data, test_data = split_sim_data(inputs, log_target)
     train_data, val_data, test_data = standardize(train_data, val_data, test_data)
