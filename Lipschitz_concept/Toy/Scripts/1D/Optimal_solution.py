@@ -20,16 +20,20 @@ matplotlib.use("Agg")              # no windows: the figures are only saved to f
 import matplotlib.pyplot as plt
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # the Toy folder
+# PATHS, for this script only: relative to this file by default, so it runs from any folder and on any machine.
+# The plot and result folders below are made from TOY_DIR; point it (or them) elsewhere to write somewhere else.
+TOY_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # the Toy folder
+sys.path.insert(0, TOY_DIR)
 from Toy_utils import REPORT_STYLE, gaussian_function, gaussian_lipschitz_constant, FWHM_calculation, plot_dir, results_dir
-from Toy_nd_utils import train_many
+from Toy_nd_utils import max_cores_from_argv, train_many
 from lipschitz_floor import lipschitz_floor
 
+MAX_CORES = max_cores_from_argv()   # the most cores the training may use: python <script> --max-cores N (None: all but one)
 QUICK = False                      # True: few points, short training, only to check that everything runs
-PLOT_DIR = plot_dir("1D", "Optimal_solution")
-RESULTS_FILE = os.path.join(results_dir("1D", "Optimal_solution"), "networks_quick.pkl" if QUICK else "networks.pkl")
+PLOT_DIR = plot_dir(TOY_DIR, "1D", "Optimal_solution")
+RESULTS_FILE = os.path.join(results_dir(TOY_DIR, "1D", "Optimal_solution"), "networks_quick.pkl" if QUICK else "networks.pkl")
 # One file per scan and number of training steps, e.g. network_scan_zoom_6000steps.pkl ({} = scan suffix, steps)
-NETWORK_SCAN_FILE = os.path.join(results_dir("1D", "Optimal_solution"),
+NETWORK_SCAN_FILE = os.path.join(results_dir(TOY_DIR, "1D", "Optimal_solution"),
                                  "network_scan{}_{}steps_quick.pkl" if QUICK else "network_scan{}_{}steps.pkl")
 LOAD_SAVED = True                  # True: use the saved networks if they exist, instead of training again
 
@@ -136,7 +140,7 @@ def network_scan(x, y, L_values, steps):
     """
     jobs = [lipschitz_job(x, y, L, seed, steps) for L in L_values for seed in SEEDS]
     print(f"Training {len(jobs)} networks for the L scan, {steps} steps each")
-    results = iter(train_many(jobs))
+    results = iter(train_many(jobs, max_cores=MAX_CORES))
 
     MSE = np.zeros((len(SEEDS), len(L_values)))
     FWHM = np.zeros_like(MSE)
@@ -189,7 +193,7 @@ def train_networks(x, y, L_values):
         jobs.append(dict(kind="unconstrained", seed=seed, steps=STEPS, lr=LEARNING_RATE, x=x_in, y=y,
                          model_kwargs=dict(input_dim=1, hidden_dim=HIDDEN_DIM, output_dim=1, depth=DEPTH)))
     print(f"Training {len(jobs)} networks")
-    results = iter(train_many(jobs))
+    results = iter(train_many(jobs, max_cores=MAX_CORES))
 
     fits, slopes = {}, {}
     for L in L_values:

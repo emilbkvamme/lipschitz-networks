@@ -19,6 +19,7 @@ from scipy.interpolate import RegularGridInterpolator
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Utils"))   # the Utils folder, with models.py
 from lipschitz_floor import lipschitz_floor_nd  # the floor (best L-Lipschitz fit) on an n-dimensional grid
 from models import LipschitzModel, UnconstrainedModel
+from train_eval import n_parallel_workers, save_model, load_model, data_fingerprint, max_cores_from_argv
 from Toy_utils import train_full_batch, train_until_converged
 
 
@@ -199,51 +200,78 @@ def train_one(job):
             (steps is then not used), with the settings in convergence (a dictionary, optional) and the targets without
             noise in y_clean (optional, shape (N,)).
         device (optional): "cpu" (default) or "cuda". The network and the data are moved there for training.
-    Returns a dictionary with the prediction, shape (N_eval,), and the gradient, shape (N_eval, n), at x_eval, and the
-    training history (only with until_converged, otherwise None).
+        model_path (optional): a .pt file for the trained network. If it exists and was trained with the same model,
+            settings, seed and data, it is loaded instead of trained again. Otherwise the network is trained and saved
+            there (see save_model in train_eval.py).
+    Returns a dictionary with the prediction, shape (N_eval,), and the gradient, shape (N_eval, n), at x_eval, the
+    training history (only with until_converged, otherwise None) and "loaded" (True if the network was loaded).
     """
     device = job.get("device", "cpu")
-    torch.manual_seed(job["seed"])
     model_cls = LipschitzModel if job["kind"] == "lipschitz" else UnconstrainedModel
-    model = model_cls(**job["model_kwargs"]).to(device)   # made on the CPU first: the same start weights on every device
     x = torch.tensor(job["x"], dtype=torch.float32, device=device)
     y = torch.tensor(job["y"], dtype=torch.float32, device=device).reshape(-1, 1)
+    until_converged = job.get("until_converged", False)
+
+    model_path = job.get("model_path")
+    settings = None
+    if model_path is not None:
+        y_clean = job.get("y_clean")
+        fingerprint_of = [x, y] if y_clean is None else [x, y, torch.as_tensor(np.asarray(y_clean), dtype=torch.float32)]
+        settings = dict(seed=job["seed"], lr=job["lr"], steps=None if until_converged else job["steps"],
+                        until_converged=until_converged, convergence=job.get("convergence", {}) if until_converged else None,
+                        data=data_fingerprint(*fingerprint_of))
+        if os.path.exists(model_path):
+            try:
+                model, saved = load_model(model_path, device=device)
+            except Exception as error:  # an unreadable or old file is trained again
+                print(f"Could not load {model_path} ({error}), training again")
+                saved = None
+            if (saved is not None and saved["model_cls"] == model_cls.__name__
+                    and saved["model_kwargs"] == dict(job["model_kwargs"]) and saved["extra"].get("settings") == settings):
+                prediction, gradient = evaluate_with_gradient(model, job.get("x_eval", job["x"]), device)
+                return {"prediction": prediction, "gradient": gradient, "history": saved["extra"].get("history"),
+                        "loaded": True}
+
+    torch.manual_seed(job["seed"])
+    model = model_cls(**job["model_kwargs"]).to(device)   # made on the CPU first: the same start weights on every device
     history = None
-    if job.get("until_converged", False):
+    if until_converged:
         y_clean = job.get("y_clean")
         if y_clean is not None:
             y_clean = torch.tensor(y_clean, dtype=torch.float32, device=device).reshape(-1, 1)
         history = train_until_converged(model, x, y, lr=job["lr"], y_clean=y_clean, **job.get("convergence", {}))
     else:
         train_full_batch(model, x, y, steps=job["steps"], lr=job["lr"])
+    if model_path is not None:
+        save_model(model_path, model_cls, job["model_kwargs"], model.state_dict(), settings=settings, history=history)
     prediction, gradient = evaluate_with_gradient(model, job.get("x_eval", job["x"]), device)
-    return {"prediction": prediction, "gradient": gradient, "history": history}
+    return {"prediction": prediction, "gradient": gradient, "history": history, "loaded": False}
 
 
-def _train_worker(job):
-    torch.set_num_threads(1)  # one core per network: as fast as sharing all cores, so they can run side by side
+def _train_worker(args):
+    job, n_threads = args
+    torch.set_num_threads(n_threads)  # 1 core per network: as fast as sharing all cores, so they can run side by side
     return train_one(job)
 
 
-def train_many(jobs, n_workers=None):
+def train_many(jobs, max_cores=None, n_workers=None, threads_per_worker=1):
     """
     Runs train_one for every job in parallel, one process per network, and returns the results in the same order.
     The jobs are independent, so a scan over L values and seeds trains about as fast as a single network.
+    max_cores: the most cores the scan may use (None: all available cores but one, the old default).
+    n_workers: an extra cap on the number of networks trained at the same time (kept for older scripts).
+    threads_per_worker: PyTorch threads per network; with max_cores given, the workers are reduced so that
+    workers * threads_per_worker stays within it.
     On a GPU the processes share it. Every process still needs its own CPU core to send the work to the GPU, so
-    n_workers should be at most the number of cores you have there.
+    max_cores should be at most the number of cores you have there.
     """
-    if n_workers is None:
-        # The cores this process may use. On a cluster that is only the cores the job asked for, while os.cpu_count()
-        # gives all cores of the machine. macOS has no sched_getaffinity, but there all cores can be used anyway.
-        if hasattr(os, "sched_getaffinity"):
-            n_cores = len(os.sched_getaffinity(0))
-        else:
-            n_cores = os.cpu_count() or 2
-        n_workers = min(len(jobs), max(1, n_cores - 1))
+    threads_per_worker = max(1, int(threads_per_worker))
+    worker_cap = None if max_cores is None else max(1, max_cores // threads_per_worker)
+    n_workers = n_parallel_workers(len(jobs), worker_cap, n_workers, default=lambda n_cores: max(1, n_cores - 1))
     with mp.get_context("spawn").Pool(n_workers) as pool:
         # chunksize=1: a free worker takes the next single job, so jobs of very different length (e.g. trained until
         # converged) are spread evenly over the workers
-        return pool.map(_train_worker, jobs, chunksize=1)
+        return pool.map(_train_worker, [(job, threads_per_worker) for job in jobs], chunksize=1)
 
 
 ##### NOISE AND FOURIER SPECTRA #####

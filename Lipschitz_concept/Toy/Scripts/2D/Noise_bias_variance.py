@@ -43,15 +43,19 @@ matplotlib.use("Agg")              # no windows: the figures are only saved to f
 import matplotlib.pyplot as plt
 
 # "Homemade" modules, in the Toy folder
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # the Toy folder
+# PATHS, for this script only: relative to this file by default, so it runs from any folder and on any machine.
+# The plot and result folders below are made from TOY_DIR; point it (or them) elsewhere to write somewhere else.
+TOY_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # the Toy folder
+sys.path.insert(0, TOY_DIR)
 from Toy_utils import REPORT_STYLE, train_full_batch, plot_dir, results_dir, save_results, load_results
-from Toy_nd_utils import (gaussian_nd, isotropic_cov, make_grid, grid_integral, profile, wavevector,
+from Toy_nd_utils import (max_cores_from_argv, gaussian_nd, isotropic_cov, make_grid, grid_integral, profile, wavevector,
                           mode_amplitude_nd, train_many, central_line, radial_spectrum)
 from lipschitz_floor import lipschitz_floor_nd
 from models import LipschitzModel, UnconstrainedModel
 
 
 ##### SETTINGS #####
+MAX_CORES = max_cores_from_argv()   # the most cores the training may use: python <script> --max-cores N (None: all but one)
 QUICK = False       # True: few noise draws and short training, only to check that everything runs
 LOAD_SAVED = True   # True: make the part A figures from the saved fits if they exist, instead of training again
 
@@ -95,9 +99,9 @@ FIG_SIZE = (3.1, 2.8)
 FIG_MARGINS = dict(left=0.24, right=0.96, top=0.96, bottom=0.18)
 
 # Output folders. The QUICK numbers get their own file, so they never replace a full run
-PLOT_DIR = plot_dir("2D", "Noise_bias_variance")
-RESULTS_FILE = os.path.join(results_dir("2D", "Noise_bias_variance"), "results_quick.npz" if QUICK else "results.npz")
-OUTPUT_NOISE_FILE = os.path.join(results_dir("2D", "Noise_bias_variance"),                 # part A with all its fits
+PLOT_DIR = plot_dir(TOY_DIR, "2D", "Noise_bias_variance")
+RESULTS_FILE = os.path.join(results_dir(TOY_DIR, "2D", "Noise_bias_variance"), "results_quick.npz" if QUICK else "results.npz")
+OUTPUT_NOISE_FILE = os.path.join(results_dir(TOY_DIR, "2D", "Noise_bias_variance"),                 # part A with all its fits
                                  "output_noise_quick.pkl" if QUICK else "output_noise.pkl")
 
 
@@ -205,7 +209,7 @@ def output_noise_part(axes, X, x, truth, L_true, noise_kind):
     for draw in range(NOISE_DRAWS):
         jobs += lipschitz_jobs(x, (truth + noise_draws[draw]).ravel(), L_values, seed=draw)
     start = time.time()
-    results = train_many(jobs)
+    results = train_many(jobs, max_cores=MAX_CORES)
     print(f"   {noise_kind} noise: trained {len(jobs)} networks in {time.time() - start:.0f} s")
 
     network_fits = {L: [] for L in L_values}
@@ -274,7 +278,7 @@ def input_noise_part(axes, X, x, truth, L_true):
         y_train = np.concatenate([truth.ravel()] * INPUT_NOISE_COPIES)
         jobs += lipschitz_jobs(x_train, y_train, L_values, seed=0, x_eval=x)   # evaluated on the clean grid
     start = time.time()
-    results = train_many(jobs)
+    results = train_many(jobs, max_cores=MAX_CORES)
     print(f"   input noise: trained {len(jobs)} networks in {time.time() - start:.0f} s")
 
     true_width = width_along_axis(axes, truth)

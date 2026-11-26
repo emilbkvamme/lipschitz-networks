@@ -27,17 +27,21 @@ matplotlib.use("Agg")              # no windows: the figures are only saved to f
 import matplotlib.pyplot as plt
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # the Toy folder
+# PATHS, for this script only: relative to this file by default, so it runs from any folder and on any machine.
+# The plot and result folders below are made from TOY_DIR; point it (or them) elsewhere to write somewhere else.
+TOY_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # the Toy folder
+sys.path.insert(0, TOY_DIR)
 from Toy_utils import REPORT_STYLE, plot_dir, results_dir, save_results, load_results
-from Toy_nd_utils import (gaussian_nd, isotropic_cov, gaussian_lipschitz_constant_nd, isotropic_lipschitz_constant,
+from Toy_nd_utils import (max_cores_from_argv, gaussian_nd, isotropic_cov, gaussian_lipschitz_constant_nd, isotropic_lipschitz_constant,
                           pyramid_radius, make_grid, grid_integral, grid_gradient, central_line, profile,
                           fwhm_equivalent, fwhm_along, train_many)
 from lipschitz_floor import lipschitz_floor_nd
 
+MAX_CORES = max_cores_from_argv()   # the most cores the training may use: python <script> --max-cores N (None: all but one)
 QUICK = False                      # True: small grids, short training, only to check that everything runs
-PLOT_DIR = plot_dir("2D", "Optimal_solution")
-FLOORS_FILE = os.path.join(results_dir("2D", "Optimal_solution"), "floors_quick.pkl" if QUICK else "floors.pkl")
-NETWORKS_FILE = os.path.join(results_dir("2D", "Optimal_solution"), "networks_quick.pkl" if QUICK else "networks.pkl")
+PLOT_DIR = plot_dir(TOY_DIR, "2D", "Optimal_solution")
+FLOORS_FILE = os.path.join(results_dir(TOY_DIR, "2D", "Optimal_solution"), "floors_quick.pkl" if QUICK else "floors.pkl")
+NETWORKS_FILE = os.path.join(results_dir(TOY_DIR, "2D", "Optimal_solution"), "networks_quick.pkl" if QUICK else "networks.pkl")
 LOAD_SAVED = True                  # True: use the saved floors and networks if they exist, instead of computing again
 INPUT_NORM = "l2"                  # the norm of the networks, the floor and L_true: "l2", or "l1" as in the notebook
 
@@ -122,7 +126,8 @@ def _floor_worker(job):
 
 def floors_many(jobs):
     """The floor for every job (y, axes, L), FLOOR_WORKERS at a time in separate processes. Returns them in order."""
-    with mp.get_context("spawn").Pool(min(len(jobs), FLOOR_WORKERS)) as pool:
+    n_workers = min(len(jobs), FLOOR_WORKERS if MAX_CORES is None else min(FLOOR_WORKERS, MAX_CORES))
+    with mp.get_context("spawn").Pool(n_workers) as pool:
         return pool.map(_floor_worker, jobs, chunksize=1)
 
 
@@ -209,7 +214,7 @@ def train_networks(X, y, x_train, y_train, L_true):
         jobs.append(dict(kind="unconstrained", seed=seed, steps=STEPS, lr=LEARNING_RATE, x=x_train, y=y_train,
                          x_eval=x_eval, model_kwargs=dict(input_dim=DIM, hidden_dim=HIDDEN_DIM, output_dim=1, depth=DEPTH)))
     print(f"Training {len(jobs)} networks on {len(x_train)} random points, evaluated on the {n_grid} grid points")
-    results = iter(train_many(jobs))
+    results = iter(train_many(jobs, max_cores=MAX_CORES))
 
     def collect(runs):
         """The grid fits, grid gradients and training MSE of the runs of one network (one per seed)."""

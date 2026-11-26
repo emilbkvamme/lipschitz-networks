@@ -26,7 +26,7 @@
 #
 # The bound is measured in INPUT_NORM (l2 by default: the norm that treats every direction equally, from stage 1).
 #
-# Run from the Lipschitz_concept folder:  python Toy_nd_noise.py
+# Run from any folder:  python Toy_nd_noise.py
 # The figures and the numbers (results.npz) are saved in Plots/Toy_nd_noise.
 
 import os
@@ -39,15 +39,20 @@ import matplotlib.ticker
 matplotlib.use("Agg")              # no windows: the figures are only saved to files
 import matplotlib.pyplot as plt
 
-# "Homemade" modules
+# "Homemade" modules, in the Toy folder.
+# PATHS, for this script only: relative to this file by default, so it runs from any folder and on any machine.
+import sys
+TOY_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # the Toy folder
+sys.path.insert(0, TOY_DIR)
 from Toy_utils import REPORT_STYLE, train_full_batch
-from Toy_nd_utils import (gaussian_nd, isotropic_cov, make_grid, grid_integral, profile, wavevector,
+from Toy_nd_utils import (max_cores_from_argv, gaussian_nd, isotropic_cov, make_grid, grid_integral, profile, wavevector,
                           mode_amplitude_nd, train_many)
 from lipschitz_floor import lipschitz_floor_nd
 from models import LipschitzModel, UnconstrainedModel
 
 
 ##### SETTINGS #####
+MAX_CORES = max_cores_from_argv()   # the most cores the training may use: python <script> --max-cores N (None: all but one)
 QUICK = True        # True: few noise draws and short training, only to check that everything runs
 
 INPUT_NORM = "l2"   # the norm of the input the bound is measured in ("l1", "l2" or "linf"), see models.py
@@ -196,7 +201,7 @@ def output_noise_part(axes, X, x, truth, L_true, noise_kind):
     for draw in range(NOISE_DRAWS):
         jobs += lipschitz_jobs(x, (truth + noise_draws[draw]).ravel(), L_values, seed=draw)
     start = time.time()
-    results = train_many(jobs)
+    results = train_many(jobs, max_cores=MAX_CORES)
     print(f"   {noise_kind} noise: trained {len(jobs)} networks in {time.time() - start:.0f} s")
 
     network_fits = {L: [] for L in L_values}
@@ -259,7 +264,7 @@ def input_noise_part(axes, X, x, truth, L_true):
         y_train = np.concatenate([truth.ravel()] * INPUT_NOISE_COPIES)
         jobs += lipschitz_jobs(x_train, y_train, L_values, seed=0, x_eval=x)   # evaluated on the clean grid
     start = time.time()
-    results = train_many(jobs)
+    results = train_many(jobs, max_cores=MAX_CORES)
     print(f"   input noise: trained {len(jobs)} networks in {time.time() - start:.0f} s")
 
     true_width = width_along_axis(axes, truth)

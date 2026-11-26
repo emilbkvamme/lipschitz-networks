@@ -13,14 +13,18 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # the Toy folder
-from Toy_nd_utils import *
+# PATHS, for this script only: relative to this file by default, so it runs from any folder and on any machine.
+# The plot and result folders below are made from TOY_DIR; point it (or them) elsewhere to write somewhere else.
+TOY_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))   # the Toy folder
+sys.path.insert(0, TOY_DIR)
+from Toy_nd_utils import *   # includes max_cores_from_argv
 from Toy_utils import REPORT_STYLE, plot_dir, results_dir, save_results, load_results
 from Toy_data_missing import wedge_mask, INPUT_NORM, CONTOUR_LEVELS
 
+MAX_CORES = max_cores_from_argv()   # the most cores the training may use: python <script> --max-cores N (None: all but one)
 QUICK = False                       # True: very short training, only to check that everything runs
-PLOT_DIR = plot_dir("2D", os.path.join("Missing_data", "Convergence"))
-RESULTS_FILE = os.path.join(results_dir("2D", os.path.join("Missing_data", "Convergence")),
+PLOT_DIR = plot_dir(TOY_DIR, "2D", os.path.join("Missing_data", "Convergence"))
+RESULTS_FILE = os.path.join(results_dir(TOY_DIR, "2D", os.path.join("Missing_data", "Convergence")),
                             "results_quick.pkl" if QUICK else "results.pkl")   # QUICK runs get their own file, so they never replace a full run
 LOAD_SAVED = True                  # True: make the plots from RESULTS_FILE if it exists, instead of training again
 
@@ -65,7 +69,7 @@ def convergence_test():
             labels.append((case, "Unconstrained", 3e-3, steps))
 
     print(f"Training {len(jobs)} networks, grid {len(axes[0])}^{N} points")
-    results = train_many(jobs)
+    results = train_many(jobs, max_cores=MAX_CORES)
 
     # The measures of every network
     table = {}
